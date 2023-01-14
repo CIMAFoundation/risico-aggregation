@@ -14,6 +14,7 @@ use geo_rasterize::Transform;
 
 use geo_types::point;
 use ndarray::Array1;
+use rayon::prelude::*;
 use shapefile::{dbase::FieldValue, Polygon};
 
 pub fn write_to_geotiff(
@@ -85,21 +86,25 @@ fn main() {
 
     // read the netcdf file
     // Open the file `simple_xy.nc`:
-    let file = netcdf::open("data/VPPF.nc").unwrap();
+    // let nc_file = netcdf::open("/opt/risico/RISICOMEDSTAR/OUTPUT-NC/VPPF.nc").unwrap();
+    // let shp_file = "/Users/mirko/Downloads/medstar_gadm.shp";
+    let nc_file = netcdf::open("data/VPPF.nc").unwrap();
+    let shp_file = "data/comuni_ISTAT2001.shp";    
+    const FIELD: &str = "PRO_COM";
 
     // Get the variable in this file with the name "data"
-    let lats = &file
+    let lats = &nc_file
         .variable("latitude")
         .expect("Could not find variable 'latitude'");
-    let lons = &file
+    let lons = &nc_file
         .variable("longitude")
         .expect("Could not find variable 'longitude'");
 
-    let time = &file
+    let time = &nc_file
         .variable("time")
         .expect("Could not find variable 'longitude'");
 
-    let var = &file
+    let var = &nc_file
         .variable("VPPF")
         .expect("Could not find variable 'longitude'");
 
@@ -131,9 +136,9 @@ fn main() {
     println!("pix_to_geo: {:?}", pix_to_geo);
     println!("geo_to_pix: {:?}", geo_to_pix);
 
-    let filename = "data/comuni_ISTAT2001.shp";
-    let mut reader = shapefile::Reader::from_path(filename).unwrap();
-    const PRO_COM: &str = "PRO_COM";
+    
+    let mut reader = shapefile::Reader::from_path(shp_file).unwrap();
+    
 
     let n_rows = lats.len();
     let n_cols = lons.len();
@@ -148,19 +153,22 @@ fn main() {
         .unwrap();
     println!("read data: {:?}", t.elapsed());
 
-    
+    let records: Vec<_> = reader
+        .iter_shapes_and_records()
+        .filter(|result| result.is_ok())
+        .map(|result| result.unwrap())
+        .filter_map(|(shape, record)| {
+            let name = record.get(FIELD);
+            if name.is_none() {
+                return None;
+            };
+            let name = name.unwrap();
 
-    for result in reader.iter_shapes_and_records() {
-        let (shape, record) = result.unwrap();
+            let name = match name {
+                FieldValue::Numeric(Some(name)) => name,
+                _ => return None,
+            };
 
-        let mut builder = BinaryBuilder::new()
-            .width(lons.len())
-            .height(lats.len())
-            .geo_to_pix(geo_to_pix)
-            .build()
-            .unwrap();
-
-        if let Some(FieldValue::Numeric(Some(name))) = record.get(PRO_COM) {
             let bbox = match &shape {
                 shapefile::Shape::Polygon(p) => {
                     let bbox = &p.bbox();
@@ -178,14 +186,27 @@ fn main() {
                     geo_to_pix.outer_transformed_box(&bbox)
                 }
 
-                _ => continue,
+                _ => return None,
             };
 
             let geometry = geo_types::Geometry::try_from(shape).unwrap();
-            builder.rasterize(&geometry).unwrap();
-            let pixels = builder.finish();
+            Some((geometry, bbox, name.clone()))
+        })
+        .collect();
 
-            
+    records
+        .par_iter()
+        .map(|result| {
+            let (geometry, bbox, name) = result;
+            let mut builder = BinaryBuilder::new()
+                .width(lons.len())
+                .height(lats.len())
+                .geo_to_pix(geo_to_pix)
+                .build()
+                .unwrap();
+
+            builder.rasterize(geometry).unwrap();
+            let pixels = builder.finish();
 
             let min_col = usize::max(0, usize::min(f64::floor(bbox.min.x) as usize, n_cols - 1));
             let max_col = usize::max(0, usize::min(f64::ceil(bbox.max.x) as usize, n_cols - 1));
@@ -196,44 +217,46 @@ fn main() {
                 println!("{name} {min_col} {max_col} {min_row} {max_row}");
             }
 
-            
-            for t in (0..n_times/8) {
+            for t in (0..n_times / 8) {
                 let mut values = vec![];
                 for row in min_row as usize..max_row as usize {
                     for col in min_col as usize..max_col as usize {
-                        if !pixels[[row, col]] { continue; };
-                        
+                        if !pixels[[row, col]] {
+                            continue;
+                        };
+
                         for it in 0..8 {
-                            let _t = t*8 + it;
+                            let _t = t * 8 + it;
                             let val = data[[_t, row, col]];
 
-                            if val == -9999.0 { continue; }
+                            if val == -9999.0 {
+                                continue;
+                            }
 
                             values.push(val);
                         }
                     }
                 }
-            
+
                 let values_len = values.len();
-                
-                if values_len == 0 { continue; }
+
+                if values_len == 0 {
+                    continue;
+                }
 
                 values.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-                let percentile_length = (values_len as f32 * 0.75)  as usize;
+                let percentile_length = (values_len as f32 * 0.75) as usize;
                 let value = values
                     .iter()
                     .skip(percentile_length)
-                    .fold(0.0, 
-                        |acc, x| 
-                        acc + x
-                    ) / (percentile_length as f32);
-                
+                    .fold(0.0, |acc, x| acc + x)
+                    / (percentile_length as f32);
+
                 println!("{name} {t} {value}");
             }
-            
-        }
-    }
+        })
+        .collect::<Vec<_>>();
     println!("Elapsed time: {:?}", start_time.elapsed());
     // write res to file as text in the form name; [row, col], [row, col], ...
     // let file = File::create("out/indices.txt").unwrap();
