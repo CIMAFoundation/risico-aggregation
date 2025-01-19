@@ -1,98 +1,103 @@
-use std::{
-    fs::File,
-    io::{BufWriter, Write},
-    marker::PhantomData,
-};
+use std::collections::HashMap;
+use std::f32::NAN;
+use std::{error::Error, marker::PhantomData};
 
+use cftime_rs::calendars::Calendar;
+
+use cftime_rs::utils::get_datetime_and_unit_from_units;
+use chrono::{DateTime, TimeZone, Timelike, Utc};
 use euclid::{Box2D, Point2D};
-use gdal::{
-    self,
-    raster::{Buffer, RasterCreationOption},
-    vector::Geometry,
-};
 use geo_rasterize::Transform;
 
-use geo_types::point;
+use geo_rasterize::BinaryBuilder;
 use ndarray::Array1;
+
+use kolmogorov_smirnov::percentile;
+use netcdf::{AttrValue, File, Variable};
+use noisy_float::types::N32;
 use rayon::prelude::*;
-use shapefile::{dbase::FieldValue, Polygon};
+use shapefile::dbase::FieldValue;
 
-pub fn write_to_geotiff(
-    file: &str,
-    pix_to_geo: [f64; 6],
-    values: &[i32],
-    n_rows: usize,
-    n_cols: usize,
-) -> Result<(), gdal::errors::GdalError> {
-    // Open a GDAL driver for GeoTIFF files
-    let driver = gdal::DriverManager::get_driver_by_name(&"GTiff")?;
+use std::io::Write;
+use std::time::Instant;
 
-    let options = vec![
-        RasterCreationOption {
-            key: "COMPRESS",
-            value: "LZW",
-        },
-        RasterCreationOption {
-            key: "PROFILE",
-            value: "GDALGeoTIFF",
-        },
-        RasterCreationOption {
-            key: "BIGTIFF",
-            value: "YES",
-        },
-    ];
-    let mut dataset = driver.create_with_band_type_with_options::<i32, &str>(
-        file,
-        n_cols as isize,
-        n_rows as isize,
-        1,
-        &options,
-    )?;
+type IntersectionMap = std::collections::HashMap<String, Vec<(usize, usize)>>;
+type StatsFunction = (String, Box<dyn Fn(&ndarray::Array1<N32>) -> f32>);
 
-    // Set the geo-transform for the dataset
-    dataset.set_geo_transform(&pix_to_geo)?;
+const NODATA: f32 = -9999.0;
 
-    // Set the Coordinate Reference System for the dataset
-    let proj_wkt = "+proj=longlat +datum=WGS84 +no_defs";
-    dataset.set_projection(proj_wkt)?;
-
-    // Get a reference to the first band
-    let mut band = dataset.rasterband(1)?;
-    //band.set_no_data_value(Some(0.into()))?;
-
-    // Create a buffer with some data to write to the band
-    let mut data = vec![];
-    for row in 0..n_rows {
-        for col in 0..n_cols {
-            let index = (row * n_cols + col) as usize;
-            let val = values[index];
-            data.push(val);
-        }
-    }
-    let size = (n_cols, n_rows);
-    let buffer = Buffer::new(size, data);
-
-    // Write the data to the band
-    band.write((0, 0), size, &buffer)?;
-
-    Ok(())
+#[derive(Debug)]
+struct FeatureAggregation {
+    name: String,
+    stats: Vec<(String, f32)>,
+    dates_start: Vec<i64>,
+    dates_end: Vec<i64>,
 }
 
-fn main() {
-    let start_time = std::time::Instant::now();
-    // open a shapefile for reading using gdal
+// extract the time from a netcdf file using the given attribute
+fn extract_time(time_var: &Variable) -> Result<Array1<DateTime<Utc>>, Box<dyn Error>> {
+    let time_units_attr_name: String = String::from("units");
 
-    use geo_rasterize::BinaryBuilder;
+    let units_attr = time_var.attribute(&time_units_attr_name);
+    let timeline = if units_attr.is_none() {
+        // if the units attribute is not found, try to use the default units which are "seconds since 1970-01-01 00:00:00"
+        time_var
+            .values::<i64>(None, None)?
+            .into_iter()
+            .filter_map(|t| {
+                let adjusted_time = t; // apply the offset
+                DateTime::from_timestamp_millis(adjusted_time * 1000)
+            })
+            .collect::<Array1<DateTime<Utc>>>()
+    } else {
+        let units_attr_values = units_attr
+            .expect("should have units attribute")
+            .value()
+            .expect("should have a value");
 
-    // read the netcdf file
-    // Open the file `simple_xy.nc`:
-    // let nc_file = netcdf::open("/opt/risico/RISICOMEDSTAR/OUTPUT-NC/VPPF.nc").unwrap();
-    // let shp_file = "/Users/mirko/Downloads/medstar_gadm.shp";
-    let nc_file = netcdf::open("data/VPPF.nc").unwrap();
-    let shp_file = "data/comuni_ISTAT2001.shp";    
-    const FIELD: &str = "PRO_COM";
+        let units = if let AttrValue::Str(units) = units_attr_values {
+            units.to_owned()
+        } else {
+            return Err("Could not find units".into());
+        };
 
+        let calendar = Calendar::Standard;
+        let (cf_datetime, unit) = get_datetime_and_unit_from_units(&units, calendar)?;
+        let duration = unit.to_duration(calendar);
+
+        time_var
+            .values::<i64>(None, None)?
+            .into_iter()
+            .filter_map(|t| (&cf_datetime + (&duration * t)).ok())
+            .map(|d| {
+                let (year, month, day, hour, minute, seconds) =
+                    d.ymd_hms().expect("should be a valid date");
+                let year: i32 = year.try_into().unwrap();
+                // create a UTC datetime
+                Utc.with_ymd_and_hms(
+                    year,
+                    month as u32,
+                    day as u32,
+                    hour as u32,
+                    minute as u32,
+                    seconds as u32,
+                )
+                .single()
+                .expect("should be a valid date")
+            })
+            .collect::<Array1<DateTime<Utc>>>()
+    };
+    Ok(timeline)
+}
+
+fn get_intersections(
+    nc_file: &File,
+    shp_file: &str,
+    field: &str,
+) -> Result<IntersectionMap, Box<dyn Error>> {
     // Get the variable in this file with the name "data"
+    let mut reader = shapefile::Reader::from_path(shp_file)?;
+
     let lats = &nc_file
         .variable("latitude")
         .expect("Could not find variable 'latitude'");
@@ -100,74 +105,41 @@ fn main() {
         .variable("longitude")
         .expect("Could not find variable 'longitude'");
 
-    let time = &nc_file
-        .variable("time")
-        .expect("Could not find variable 'longitude'");
-
-    let var = &nc_file
-        .variable("VPPF")
-        .expect("Could not find variable 'longitude'");
-
-    // Read a single datapoint from the variable as a numeric type
-    let time = time.values::<i64>(None, None).unwrap();
     let lats = lats.values::<f32>(None, None).unwrap();
     let lons = lons.values::<f32>(None, None).unwrap();
 
-    let min_lat = lats[0] as f64;
     let max_lat = lats[lats.len() - 1] as f64;
     let min_lon = lons[0] as f64;
-    let max_lon = lons[lons.len() - 1] as f64;
     let lat_step = (lats[1] - lats[0]) as f64;
     let lon_step = (lons[1] - lons[0]) as f64;
 
-    println!("min_lat: {}", min_lat);
-    println!("max_lat: {}", max_lat);
-    println!("min_lon: {}", min_lon);
-    println!("max_lon: {}", max_lon);
-    println!("lat_step: {}", lat_step);
-    println!("lon_step: {}", lon_step);
-
     // generate transform matrix in gdal format
-
     let pix_to_geo = Transform::new(lon_step, 0.0, 0.0, -lat_step, min_lon, max_lat);
-
-    let geo_to_pix = pix_to_geo.inverse().unwrap();
-
-    println!("pix_to_geo: {:?}", pix_to_geo);
-    println!("geo_to_pix: {:?}", geo_to_pix);
-
-    
-    let mut reader = shapefile::Reader::from_path(shp_file).unwrap();
-    
+    let geo_to_pix = pix_to_geo.inverse().expect("Could not invert transform");
 
     let n_rows = lats.len();
     let n_cols = lons.len();
-    let n_times = time.len();
-    //let gdal_transform = [min_lon, lon_step, 0.0, max_lat, 0.0, -lat_step];
-
-    //let mut res = vec![];
-
-    let t = std::time::Instant::now();
-    let data = var
-        .values::<f32>(Some(&[0, 0, 0]), Some(&[n_times, n_rows, n_cols]))
-        .unwrap();
-    println!("read data: {:?}", t.elapsed());
 
     let records: Vec<_> = reader
         .iter_shapes_and_records()
         .filter(|result| result.is_ok())
         .map(|result| result.unwrap())
         .filter_map(|(shape, record)| {
-            let name = record.get(FIELD);
+            let name = record.get(field);
             if name.is_none() {
                 return None;
             };
-            let name = name.unwrap();
+            let name = name.expect("Could not get field");
 
-            let name = match name {
-                FieldValue::Numeric(Some(name)) => name,
+            let name: String = match name {
+                FieldValue::Numeric(Some(name)) => name.to_string(),
+                FieldValue::Character(Some(name)) => name.to_owned(),
                 _ => return None,
             };
+
+            // if name != "9031" {
+            //     return None;
+            // }
 
             let bbox = match &shape {
                 shapefile::Shape::Polygon(p) => {
@@ -183,91 +155,268 @@ fn main() {
                         _unit: PhantomData,
                     };
                     let bbox = Box2D::new(p1, p2);
+
+                    // get boundin box in raster coordinates
                     geo_to_pix.outer_transformed_box(&bbox)
                 }
 
                 _ => return None,
             };
 
-            let geometry = geo_types::Geometry::try_from(shape).unwrap();
+            let geometry = geo_types::Geometry::try_from(shape).expect("Could not convert shape");
             Some((geometry, bbox, name.clone()))
         })
         .collect();
 
-    records
+    let name_and_coords = records
         .par_iter()
         .map(|result| {
             let (geometry, bbox, name) = result;
+
             let mut builder = BinaryBuilder::new()
                 .width(lons.len())
                 .height(lats.len())
                 .geo_to_pix(geo_to_pix)
                 .build()
-                .unwrap();
+                .expect("Could not create geo-rasterize builder");
 
-            builder.rasterize(geometry).unwrap();
+            builder
+                .rasterize(geometry)
+                .expect("Could not rasterize geometry");
             let pixels = builder.finish();
 
-            let min_col = usize::max(0, usize::min(f64::floor(bbox.min.x) as usize, n_cols - 1));
-            let max_col = usize::max(0, usize::min(f64::ceil(bbox.max.x) as usize, n_cols - 1));
-            let min_row = usize::max(0, usize::min(f64::floor(bbox.min.y) as usize, n_rows - 1));
-            let max_row = usize::max(0, usize::min(f64::ceil(bbox.max.y) as usize, n_rows - 1));
+            let min_col = f64::floor(bbox.min.x) as usize;
+            let max_col = f64::ceil(bbox.max.x);
+            let min_row = f64::floor(bbox.min.y) as usize;
+            let max_row = f64::ceil(bbox.max.y);
 
-            if min_col > max_col || min_row > max_row {
-                println!("{name} {min_col} {max_col} {min_row} {max_row}");
+            if max_col < 0.0 || max_row < 0.0 || min_col > (n_cols - 1) || min_row > (n_rows + 1) {
+                return (name, vec![]);
             }
 
-            for t in (0..n_times / 8) {
-                let mut values = vec![];
-                for row in min_row as usize..max_row as usize {
-                    for col in min_col as usize..max_col as usize {
-                        if !pixels[[row, col]] {
-                            continue;
-                        };
+            let min_col = usize::clamp(min_col as usize, 0, n_cols - 1);
+            let max_col = usize::clamp(max_col as usize, 0, n_cols - 1);
+            let min_row = usize::clamp(min_row as usize, 0, n_rows - 1);
+            let max_row = usize::clamp(max_row as usize, 0, n_rows - 1);
 
-                        for it in 0..8 {
-                            let _t = t * 8 + it;
-                            let val = data[[_t, row, col]];
+            let coords = (min_row..=max_row)
+                .flat_map(|row| (min_col..=max_col).map(move |col| (row, col)))
+                .filter(|(row, col)| pixels[[*row, *col]])
+                .collect::<Vec<_>>();
 
-                            if val == -9999.0 {
-                                continue;
-                            }
-
-                            values.push(val);
-                        }
-                    }
-                }
-
-                let values_len = values.len();
-
-                if values_len == 0 {
-                    continue;
-                }
-
-                values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-                let percentile_length = (values_len as f32 * 0.75) as usize;
-                let value = values
-                    .iter()
-                    .skip(percentile_length)
-                    .fold(0.0, |acc, x| acc + x)
-                    / (percentile_length as f32);
-
-                println!("{name} {t} {value}");
-            }
+            (name, coords)
         })
         .collect::<Vec<_>>();
-    println!("Elapsed time: {:?}", start_time.elapsed());
-    // write res to file as text in the form name; [row, col], [row, col], ...
-    // let file = File::create("out/indices.txt").unwrap();
-    // let mut writer = BufWriter::new(file);
 
-    // for (name, values) in res {
-    //     let valstring = values
-    //         .map(|val| format!("{}", val))
-    //         .collect::<Vec<String>>()
-    //         .join(", ");
-    //     let line = format!("{}; {}\n", name, valstring);
-    //     writer.write_all(line.as_bytes()).unwrap();
-    // }
+    let mut intersections: IntersectionMap = HashMap::new();
+
+    // fill the hashmap
+    for (name, coords) in name_and_coords {
+        intersections.insert(name.into(), coords);
+    }
+
+    Ok(intersections)
+}
+
+fn calculate_stats(
+    nc_file: &File,
+    variable: &str,
+    intersections: &IntersectionMap,
+    hours_resolution: u32,
+    hours_offset: u32,
+    stats_functions: &Vec<StatsFunction>,
+) -> Result<Vec<FeatureAggregation>, Box<dyn Error>> {
+    let time = &nc_file
+        .variable("time")
+        .expect("Could not find variable 'longitude'");
+    let var = &nc_file
+        .variable(variable)
+        .expect("Could not find variable 'longitude'");
+
+    // Read a single datapoint from the variable as a numeric type
+    let time = extract_time(&time)?;
+    let lats = &nc_file
+        .variable("latitude")
+        .expect("Could not find variable 'latitude'");
+    let lons = &nc_file
+        .variable("longitude")
+        .expect("Could not find variable 'longitude'");
+
+    let n_rows = lats.len();
+    let n_cols = lons.len();
+
+    let n_times = time.len();
+
+    println!("read data");
+    let data = var
+        .values::<f32>(Some(&[0, 0, 0]), Some(&[n_times, n_rows, n_cols]))
+        .expect("Could not read data");
+
+    println!("data read");
+
+    let mut res: Vec<FeatureAggregation> = vec![];
+
+    // iterate over time considering offset and resolution
+    // segment the timeline by the resolution and offset
+
+    let mut buckets = vec![];
+    let mut current_bucket = vec![];
+    for (ix, t) in time.iter().enumerate() {
+        let hour = t.hour();
+        if (hour + hours_offset) % hours_resolution == 0 {
+            if !current_bucket.is_empty() {
+                buckets.push(current_bucket);
+                current_bucket = vec![];
+            }
+        }
+        current_bucket.push((ix, t));
+    }
+
+    for (name, coords) in intersections {
+        let mut stats = vec![];
+        let mut dates_start = vec![];
+        let mut dates_end = vec![];
+
+        for bucket in &buckets {
+            let ix_start = bucket[0].0;
+            let ix_end = bucket[bucket.len() - 1].0;
+            let date_start = bucket[0].1.timestamp_millis();
+            let date_end = bucket[bucket.len() - 1].1.timestamp_millis();
+
+            // [TODO] insertion sort for speeding up processing
+            let vals: Array1<N32> = (ix_start..=ix_end)
+                .flat_map(|t_ix| coords.iter().map(move |(row, col)| (t_ix, *row, *col)))
+                .map(|(t_ix, row, col)| data[[t_ix, row, col]])
+                .filter(|x| *x != NODATA && !x.is_nan())
+                .map(|x| N32::from_f32(x))
+                .collect();
+
+            if vals.len() == 0 {
+                stats_functions.iter().for_each(|(stat_name, _)| {
+                    stats.push((stat_name.clone(), NAN));
+                });
+            } else {
+                stats_functions.iter().for_each(|(stat_name, stat_fn)| {
+                    let stat = stat_fn(&vals);
+                    stats.push((stat_name.clone(), stat));
+                });
+            }
+            dates_start.push(date_start);
+            dates_end.push(date_end);
+        }
+
+        res.push(FeatureAggregation {
+            name: name.clone(),
+            stats,
+            dates_start,
+            dates_end,
+        });
+    }
+
+    Ok(res)
+}
+
+fn max(arr: &ndarray::Array1<N32>) -> f32 {
+    if arr.len() == 0 {
+        return NAN;
+    }
+
+    let maybe_max = arr.iter().max();
+    if let Some(max) = maybe_max {
+        (*max).into()
+    } else {
+        NAN
+    }
+}
+
+fn min(arr: &ndarray::Array1<N32>) -> f32 {
+    if arr.len() == 0 {
+        return NAN;
+    }
+
+    let maybe_min = arr.iter().min();
+    if let Some(min) = maybe_min {
+        (*min).into()
+    } else {
+        NAN
+    }
+}
+
+fn mean(arr: &ndarray::Array1<N32>) -> f32 {
+    if arr.len() == 0 {
+        return NAN;
+    }
+
+    let maybe_mean = arr.mean();
+    if let Some(mean) = maybe_mean {
+        mean.into()
+    } else {
+        NAN
+    }
+}
+
+fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentile: u8) -> f32 {
+    if arr.len() == 0 {
+        return NAN;
+    }
+
+    let slice = arr.as_slice().expect("Could not get slice");
+    let perc_value = percentile(slice, the_percentile);
+
+    let over_threshold = arr
+        .iter()
+        .filter(|&x| *x > perc_value)
+        .map(|&x| x)
+        .collect::<Array1<N32>>();
+
+    if over_threshold.len() == 0 {
+        return NAN;
+    }
+    let maybe_mean = over_threshold.mean();
+    if let Some(mean) = maybe_mean {
+        mean.into()
+    } else {
+        NAN
+    }
+}
+
+fn main() {
+    let shp_file = "data/comuni_ISTAT2001.shp";
+    let nc_file = netcdf::open("data/VPPF.nc").unwrap();
+    let variable = "VPPF".to_string();
+    let start = Instant::now();
+
+    let intersections = get_intersections(&nc_file, shp_file, "PRO_COM").unwrap();
+    let duration = start.elapsed();
+    println!("Time elapsed in get_intersections() is: {:?}", duration);
+
+    let start = Instant::now();
+    let functions_map: Vec<StatsFunction> = vec![
+        ("max".into(), Box::new(&max)),
+        ("min".into(), Box::new(&min)),
+        ("mean".into(), Box::new(&mean)),
+        (
+            "mean_over_75perc".into(),
+            Box::new(|arr| mean_of_values_above_percentile(arr, 75)),
+        ),
+        (
+            "mean_over_90perc".into(),
+            Box::new(|arr| mean_of_values_above_percentile(arr, 90)),
+        ),
+        (
+            "mean_over_50perc".into(),
+            Box::new(|arr| mean_of_values_above_percentile(arr, 50)),
+        ),
+    ];
+
+    let res = calculate_stats(&nc_file, &variable, &intersections, 24, 0, &functions_map);
+    let duration = start.elapsed();
+    println!("Time elapsed in calculate_stats() is: {:?}", duration);
+
+    // dump debug print of res to file
+    let res = res.unwrap();
+    let mut file = std::fs::File::create("output.txt").unwrap();
+    for feature in res {
+        writeln!(file, "{:?}", feature).unwrap();
+    }
 }
