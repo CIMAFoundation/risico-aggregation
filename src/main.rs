@@ -1,13 +1,25 @@
 use chrono::{DateTime, Utc};
+use clap::Parser;
+
 use ndarray::{Array1, Array3};
 use risico_aggregation::{
-    calculate_stats, extract_time, get_intersections, max, mean, mean_of_values_above_percentile,
-    min, FeatureAggregation, GeomRecord, Grid, StatsFunction,
+    calculate_stats, extract_time, get_intersections, FeatureAggregation, GeomRecord, Grid,
+    StatsFunctionType,
 };
 use rusqlite::Connection;
 use shapefile::dbase::FieldValue;
 use std::error::Error;
 use std::time::Instant;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Args {
+    shp_file: String,
+    field: String,
+    nc_file: String,
+    variable: String,
+    stats: Vec<StatsFunctionType>,
+}
 
 struct NetcdfData {
     data: Array3<f32>,
@@ -247,12 +259,13 @@ pub fn write_to_db(
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let shp_file = "data/comuni_ISTAT2001.shp";
-    let field = "PRO_COM".to_string();
-    let nc_file = "data/_VPPF.nc";
-    let variable = "VPPF";
-
+fn process(
+    shp_file: &str,
+    field: &str,
+    nc_file: &str,
+    variable: &str,
+    functions: Vec<StatsFunctionType>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let start = Instant::now();
     let netcdf_data = read_netcdf(nc_file, variable)?;
     println!("Reading netcdf took {:?}", start.elapsed());
@@ -265,24 +278,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let intersections = get_intersections(&netcdf_data.grid, records).unwrap();
     println!("Calculating intersections took {:?}", start.elapsed());
 
-    let functions_map: Vec<StatsFunction> = vec![
-        ("MAX".into(), Box::new(&max)),
-        ("MIN".into(), Box::new(&min)),
-        ("MEAN".into(), Box::new(&mean)),
-        (
-            "PERC75".into(),
-            Box::new(|arr| mean_of_values_above_percentile(arr, 75)),
-        ),
-        (
-            "PERC90".into(),
-            Box::new(|arr| mean_of_values_above_percentile(arr, 90)),
-        ),
-        (
-            "PERC50".into(),
-            Box::new(|arr| mean_of_values_above_percentile(arr, 50)),
-        ),
-    ];
-
     let start = Instant::now();
     let res = calculate_stats(
         &netcdf_data.data,
@@ -290,7 +285,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &intersections,
         24,
         0,
-        &functions_map,
+        &functions,
     );
     let res = res.unwrap();
     println!("Calculating stats took {:?}", start.elapsed());
@@ -302,4 +297,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Writing to db took {:?}", start.elapsed());
 
     Ok(())
+}
+
+fn main() {
+    let args = Args::parse();
+
+    let shp_file = args.shp_file;
+    let field = args.field;
+    let nc_file = args.nc_file;
+    let variable = args.variable;
+
+    let functions = args.stats;
+
+    match process(&shp_file, &field, &nc_file, &variable, functions) {
+        Ok(_) => println!("Success"),
+        Err(e) => eprintln!("Error: {}", e),
+    }
 }

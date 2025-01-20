@@ -5,7 +5,7 @@ use std::{error::Error, marker::PhantomData};
 use cftime_rs::calendars::Calendar;
 
 use cftime_rs::utils::get_datetime_and_unit_from_units;
-use chrono::{DateTime, TimeZone, Timelike, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use euclid::{Box2D, Point2D};
 use geo_rasterize::Transform;
 
@@ -17,13 +17,56 @@ use netcdf::{AttrValue, Variable};
 use noisy_float::types::N32;
 use rayon::prelude::*;
 
+use chrono::Duration;
 use shapefile::record::GenericBBox;
 use shapefile::Point;
+use strum_macros::{Display, EnumString};
+
+use std::collections::BTreeMap;
 
 pub type IntersectionMap = std::collections::HashMap<String, Vec<(usize, usize)>>;
-pub type StatsFunction = (String, Box<dyn Fn(&ndarray::Array1<N32>) -> f32>);
+pub type StatFunction = Box<dyn Fn(&ndarray::Array1<N32>) -> f32>;
+pub type StatsFunctionTuple = (String, StatFunction);
 
 const NODATA: f32 = -9999.0;
+
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, EnumString, Display)]
+#[strum(ascii_case_insensitive)]
+
+pub enum StatsFunctionType {
+    MIN,
+    MAX,
+    MEAN,
+    PERC50,
+    PERC75,
+    PERC90,
+    PERC95,
+    PERC99,
+    IPERC50,
+    IPERC25,
+    IPERC10,
+    IPERC5,
+    IPERC1,
+}
+
+pub fn get_stat_function(stat: StatsFunctionType) -> StatFunction {
+    match stat {
+        StatsFunctionType::MIN => Box::new(min),
+        StatsFunctionType::MAX => Box::new(max),
+        StatsFunctionType::MEAN => Box::new(mean),
+        StatsFunctionType::PERC50 => Box::new(|arr| mean_of_values_above_percentile(arr, 50)),
+        StatsFunctionType::PERC75 => Box::new(|arr| mean_of_values_above_percentile(arr, 75)),
+        StatsFunctionType::PERC90 => Box::new(|arr| mean_of_values_above_percentile(arr, 90)),
+        StatsFunctionType::PERC95 => Box::new(|arr| mean_of_values_above_percentile(arr, 95)),
+        StatsFunctionType::PERC99 => Box::new(|arr| mean_of_values_above_percentile(arr, 99)),
+        StatsFunctionType::IPERC50 => Box::new(|arr| mean_of_values_below_percentile(arr, 50)),
+        StatsFunctionType::IPERC25 => Box::new(|arr| mean_of_values_below_percentile(arr, 25)),
+        StatsFunctionType::IPERC10 => Box::new(|arr| mean_of_values_below_percentile(arr, 10)),
+        StatsFunctionType::IPERC5 => Box::new(|arr| mean_of_values_below_percentile(arr, 5)),
+        StatsFunctionType::IPERC1 => Box::new(|arr| mean_of_values_below_percentile(arr, 1)),
+    }
+}
 
 #[derive(Debug)]
 pub struct FeatureAggregation {
@@ -33,6 +76,7 @@ pub struct FeatureAggregation {
     pub dates_end: Vec<DateTime<Utc>>,
 }
 
+#[derive(Debug)]
 pub struct Grid {
     pub min_lat: f64,
     pub max_lat: f64,
@@ -72,9 +116,9 @@ impl Grid {
             self.lon_step,
             0.0,
             0.0,
-            -self.lat_step,
+            self.lat_step,
             self.min_lon,
-            self.max_lat,
+            self.min_lat,
         )
     }
 }
@@ -220,37 +264,41 @@ pub fn get_intersections(
     Ok(intersections)
 }
 
-fn bucket_times(
+pub fn bucket_times(
     timeline: &Array1<DateTime<Utc>>,
     hours_resolution: u32,
     hours_offset: u32,
 ) -> Vec<Vec<(usize, &DateTime<Utc>)>> {
-    let mut buckets = vec![];
-    let mut current_bucket = vec![];
-    for (ix, t) in timeline.iter().enumerate() {
-        let hour = t.hour();
-        if (hour + hours_offset) % hours_resolution == 0 {
-            if !current_bucket.is_empty() {
-                buckets.push(current_bucket);
-                current_bucket = vec![];
-            }
-        }
-        current_bucket.push((ix, t));
-    }
-    if !current_bucket.is_empty() {
-        buckets.push(current_bucket);
+    // Safety check: make sure we have at least one time
+    if timeline.is_empty() {
+        return vec![];
     }
 
-    buckets
+    // 1. Reference time = earliest time + offset(hours)
+    let reference_time = timeline[0] + Duration::hours(hours_offset as i64);
+
+    // 2. Bucket map: bucket_index -> Vec of (original_index, &DateTime)
+    let mut buckets: BTreeMap<i64, Vec<(usize, &DateTime<Utc>)>> = BTreeMap::new();
+
+    for (i, t) in timeline.iter().enumerate() {
+        // 3. How many hours from reference?
+        let diff_hours = t.signed_duration_since(reference_time).num_hours();
+        // 4. Compute which bucket this belongs to (could be negative as well)
+        let bucket_idx = diff_hours.div_euclid(hours_resolution as i64);
+
+        buckets.entry(bucket_idx).or_default().push((i, t));
+    }
+
+    // 5. Return the buckets in ascending order of bucket index
+    buckets.into_values().collect()
 }
-
 pub fn calculate_stats(
     data: &Array3<f32>,
     timeline: &Array1<DateTime<Utc>>,
     intersections: &IntersectionMap,
     hours_resolution: u32,
     hours_offset: u32,
-    stats_functions: &Vec<StatsFunction>,
+    stats_functions: &Vec<StatsFunctionType>,
 ) -> Result<Vec<FeatureAggregation>, Box<dyn Error>> {
     let buckets = bucket_times(timeline, hours_resolution, hours_offset);
 
@@ -277,13 +325,14 @@ pub fn calculate_stats(
                 .collect();
 
             if vals.len() == 0 {
-                stats_functions.iter().for_each(|(stat_name, _)| {
-                    bucket_stats.push((stat_name.clone(), NAN));
+                stats_functions.iter().for_each(|stat_fun_type| {
+                    bucket_stats.push((stat_fun_type.to_string(), NAN));
                 });
             } else {
-                stats_functions.iter().for_each(|(stat_name, stat_fn)| {
+                stats_functions.iter().for_each(|&stat_fun_type| {
+                    let stat_fn = get_stat_function(stat_fun_type);
                     let stat = stat_fn(&vals);
-                    bucket_stats.push((stat_name.clone(), stat));
+                    bucket_stats.push((stat_fun_type.to_string(), stat));
                 });
             }
             stats.push(bucket_stats);
@@ -351,7 +400,7 @@ pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentil
 
     let over_threshold = arr
         .iter()
-        .filter(|&x| *x > perc_value)
+        .filter(|&x| *x >= perc_value)
         .map(|&x| x)
         .collect::<Array1<N32>>();
 
@@ -366,122 +415,30 @@ pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentil
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use ndarray::array;
+pub fn mean_of_values_below_percentile(arr: &ndarray::Array1<N32>, the_percentile: u8) -> f32 {
+    if arr.len() == 0 {
+        return NAN;
+    }
 
-//     #[test]
-//     fn test_grid_new() {
-//         let grid = Grid::new(0.0, 10.0, 0.0, 10.0, 1.0, 1.0);
-//         assert_eq!(grid.n_rows, 11);
-//         assert_eq!(grid.n_cols, 11);
-//     }
+    let slice = arr.as_slice().expect("Could not get slice");
+    let perc_value = percentile(slice, the_percentile);
 
-//     #[test]
-//     fn test_grid_get_transform() {
-//         let grid = Grid::new(0.0, 10.0, 0.0, 10.0, 1.0, 1.0);
-//         let _transform = grid.get_transform();
-//         // assert_eq!(transform.transform_point(0.0, 0.0), Point::new(0.0, 10.0));
-//     }
+    let below_threshold = arr
+        .iter()
+        .filter(|&x| *x < perc_value)
+        .map(|&x| x)
+        .collect::<Array1<N32>>();
 
-//     #[test]
-//     fn test_max() {
-//         let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0)];
-//         assert_eq!(max(&arr), 3.0);
-//     }
-
-//     #[test]
-//     fn test_min() {
-//         let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0)];
-//         assert_eq!(min(&arr), 1.0);
-//     }
-
-//     #[test]
-//     fn test_mean() {
-//         let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0)];
-//         assert_eq!(mean(&arr), 2.0);
-//     }
-
-//     #[test]
-//     fn test_mean_of_values_above_percentile() {
-//         let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0)];
-//         assert_eq!(mean_of_values_above_percentile(&arr, 50), 3.0);
-//     }
-
-//     #[test]
-//     fn test_bucket_times() {
-//         let timeline = array![
-//             #[allow(deprecated)]
-//             Utc.ymd(2020, 1, 1).and_hms(0, 0, 0),
-//             #[allow(deprecated)]
-//             Utc.ymd(2020, 1, 1).and_hms(1, 0, 0),
-//             #[allow(deprecated)]
-//             Utc.ymd(2020, 1, 1).and_hms(2, 0, 0),
-//             #[allow(deprecated)]
-//             Utc.ymd(2020, 1, 1).and_hms(3, 0, 0),
-//         ];
-//         let buckets = bucket_times(&timeline, 2, 0);
-//         assert_eq!(buckets.len(), 2);
-//         assert_eq!(buckets[0].len(), 2);
-//         assert_eq!(buckets[1].len(), 2);
-//     }
-
-//     #[test]
-//     fn test_get_intersections() {
-//         let grid = Grid::new(0.0, 10.0, 0.0, 10.0, 1.0, 1.0);
-//         let records = vec![GeomRecord {
-//             geometry: geo_types::Geometry::Polygon(geo_types::Polygon::new(
-//                 geo_types::LineString::from(vec![
-//                     Point::new(5.0, 5.0),
-//                     Point::new(5.0, 6.0),
-//                     Point::new(6.0, 6.0),
-//                     Point::new(6.0, 5.0),
-//                     Point::new(5.0, 5.0),
-//                 ]),
-//                 vec![],
-//             )),
-//             bbox: GenericBBox {
-//                 min: Point::new(4.0, 4.0),
-//                 max: Point::new(6.0, 6.0),
-//             },
-//             name: "test".to_string(),
-//         }];
-//         let intersections = get_intersections(&grid, records).unwrap();
-//         assert!(intersections.contains_key("test"));
-//     }
-
-//     #[test]
-//     fn test_calculate_stats() {
-//         let data = array![[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]],];
-//         let timeline = array![
-//             // suppress deprecation warning
-//             #[allow(deprecated)]
-//             Utc.ymd(2020, 1, 1).and_hms(0, 0, 0),
-//             #[allow(deprecated)]
-//             Utc.ymd(2020, 1, 1).and_hms(1, 0, 0),
-//         ];
-//         let intersections: IntersectionMap = [("test".to_string(), vec![(0, 0), (1, 1)])]
-//             .iter()
-//             .cloned()
-//             .collect();
-//         let stats_functions = vec![
-//             (
-//                 "max".to_string(),
-//                 Box::new(max) as Box<dyn Fn(&Array1<N32>) -> f32>,
-//             ),
-//             (
-//                 "min".to_string(),
-//                 Box::new(min) as Box<dyn Fn(&Array1<N32>) -> f32>,
-//             ),
-//         ];
-//         let result =
-//             calculate_stats(&data, &timeline, &intersections, 1, 0, &stats_functions).unwrap();
-//         assert_eq!(result.len(), 1);
-//         assert_eq!(result[0].name, "test");
-//         assert_eq!(result[0].stats.len(), 2);
-//     }
-// }
+    if below_threshold.len() == 0 {
+        return NAN;
+    }
+    let maybe_mean = below_threshold.mean();
+    if let Some(mean) = maybe_mean {
+        mean.into()
+    } else {
+        NAN
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -577,14 +534,14 @@ mod tests {
         let arr =
             ndarray::Array1::<N32>::from_vec((1..=10).map(|v| N32::from_f32(v as f32)).collect());
 
-        // For example, 50th percentile in 1..10 ~ 5.5
-        // So values above 5.5 => {6,7,8,9,10}, mean = 8.0
+        // For example, 50th percentile in 1..10 ~ 5.5 => 5
+        // So values above >=5 => {5,6,7,8,9,10}, mean = 8.0
         let val = mean_of_values_above_percentile(&arr, 50);
-        assert_eq!(val, 8.0);
+        assert_eq!(val, 7.5);
 
-        // 90th percentile => ~ 9.1 => values above => {10}, mean = 10
+        // 90th percentile => ~ 9.1 => 9 => values above >= 9, mean = 9.5
         let val2 = mean_of_values_above_percentile(&arr, 90);
-        assert_eq!(val2, 10.0);
+        assert_eq!(val2, 9.5);
 
         // If array is empty
         let empty = ndarray::Array1::<N32>::from_vec(vec![]);
@@ -592,43 +549,69 @@ mod tests {
     }
 
     #[test]
+    fn test_mean_of_values_below_percentile() {
+        // 10 values from 1 to 10
+        let arr =
+            ndarray::Array1::<N32>::from_vec((1..=10).map(|v| N32::from_f32(v as f32)).collect());
+
+        // For example, 50th percentile in 1..10 ~ 5.5 => 5
+        // So values below <5 => {1,2,3,4}, mean = 2.5
+        let val = mean_of_values_below_percentile(&arr, 50);
+        assert_eq!(val, 2.5);
+
+        // 90th percentile => ~ 9.1 => 9 => values below <9, mean = 4.5
+        let val2 = mean_of_values_below_percentile(&arr, 90);
+        assert_eq!(val2, 4.5);
+
+        // If array is empty
+        let empty = ndarray::Array1::<N32>::from_vec(vec![]);
+        assert!(mean_of_values_below_percentile(&empty, 50).is_nan());
+    }
+
+    #[test]
     fn test_bucket_times() {
-        // create timeline: [0h, 1h, 2h, 5h, 6h, 7h ...] etc.
+        // Construct a sample timeline
         let timeline = array![
-            Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap(),
             Utc.with_ymd_and_hms(2023, 1, 1, 1, 0, 0).unwrap(),
             Utc.with_ymd_and_hms(2023, 1, 1, 2, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2023, 1, 1, 3, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2023, 1, 1, 4, 0, 0).unwrap(),
             Utc.with_ymd_and_hms(2023, 1, 1, 5, 0, 0).unwrap(),
             Utc.with_ymd_and_hms(2023, 1, 1, 6, 0, 0).unwrap(),
-            Utc.with_ymd_and_hms(2023, 1, 1, 7, 0, 0).unwrap()
+            Utc.with_ymd_and_hms(2023, 1, 1, 7, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2023, 1, 1, 8, 0, 0).unwrap()
         ];
 
-        // Bucket them by every 2 hours, with offset=0.
-        // So we start a new bucket at hours 0, 2, 4, 6, ...
-        let buckets = super::bucket_times(&timeline, 2, 0);
+        {
+            // hours_resolution = 2, hours_offset = 0
+            let result = bucket_times(&timeline, 2, 0);
+            // We only check indices here for brevity:
+            let indices: Vec<Vec<usize>> = result
+                .iter()
+                .map(|group| group.iter().map(|(i, _)| *i).collect())
+                .collect();
 
-        // Each bucket is a Vec of (index, DateTime). Let's see how they're formed:
-        // hours in timeline: [0, 1, 2, 5, 6, 7]
-        //
-        // - first bucket: [0h, 1h] -> new bucket at hour=2
-        // - second bucket: [2h]    -> new bucket at hour=4 (which doesn't exist, so next is hour=5)
-        // - third bucket: [5h]     -> new bucket at hour=6
-        // - fourth bucket: [6h, 7h]
-        //
-        // => So we expect 4 buckets:
-        //    Bucket0 => indices [0,1]
-        //    Bucket1 => index [2]
-        //    Bucket2 => index [3]
-        //    Bucket3 => indices [4,5]
+            // Expect: [[0,1], [2,3], [4,5], [6,7]]
+            assert_eq!(
+                indices,
+                vec![vec![0, 1], vec![2, 3], vec![4, 5], vec![6, 7]],
+            );
+        }
 
-        assert_eq!(buckets.len(), 4);
-        assert_eq!(buckets[0].len(), 2); // 0,1
-        assert_eq!(buckets[0][0].0, 0);
-        assert_eq!(buckets[0][1].0, 1);
+        {
+            // hours_resolution = 3, hours_offset = 1
+            let result = bucket_times(&timeline, 3, 1);
+            let indices: Vec<Vec<usize>> = result
+                .iter()
+                .map(|group| group.iter().map(|(i, _)| *i).collect())
+                .collect();
 
-        assert_eq!(buckets[1].len(), 1); // 2
-        assert_eq!(buckets[2].len(), 1); // 3
-        assert_eq!(buckets[3].len(), 2); // 4,5
+            // Expect: [[0], [1,2,3], [4,5,6], [7]]
+            assert_eq!(
+                indices,
+                vec![vec![0], vec![1, 2, 3], vec![4, 5, 6], vec![7]]
+            );
+        }
     }
 
     #[test]
@@ -685,6 +668,12 @@ mod tests {
         // Let's at least assert it's non-empty and includes (0,0).
         assert!(coords.len() > 0);
         assert!(coords.contains(&(0, 0)));
+        assert!(coords.contains(&(0, 1)));
+        assert!(coords.contains(&(1, 0)));
+        assert!(coords.contains(&(1, 1)));
+        assert!(!coords.contains(&(0, 2)));
+        assert!(!coords.contains(&(2, 0)));
+        assert!(!coords.contains(&(2, 2)));
     }
 
     #[test]
@@ -717,7 +706,7 @@ mod tests {
 
         let intersections = get_intersections(&grid, vec![record]).unwrap();
         // We'll define some stats functions
-        let stats_functions: Vec<StatsFunction> = vec![
+        let stats_functions: Vec<StatsFunctionTuple> = vec![
             (
                 "min".into(),
                 Box::new(min) as Box<dyn Fn(&ndarray::Array1<N32>) -> f32>,
