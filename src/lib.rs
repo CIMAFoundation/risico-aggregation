@@ -28,9 +28,9 @@ const NODATA: f32 = -9999.0;
 #[derive(Debug)]
 pub struct FeatureAggregation {
     pub name: String,
-    pub stats: Vec<(String, f32)>,
-    pub dates_start: Vec<i64>,
-    pub dates_end: Vec<i64>,
+    pub stats: Vec<Vec<(String, f32)>>,
+    pub dates_start: Vec<DateTime<Utc>>,
+    pub dates_end: Vec<DateTime<Utc>>,
 }
 
 pub struct Grid {
@@ -262,10 +262,11 @@ pub fn calculate_stats(
         let mut dates_end = vec![];
 
         for bucket in &buckets {
+            let mut bucket_stats = vec![];
             let ix_start = bucket[0].0;
             let ix_end = bucket[bucket.len() - 1].0;
-            let date_start = bucket[0].1.timestamp_millis();
-            let date_end = bucket[bucket.len() - 1].1.timestamp_millis();
+            let date_start = bucket[0].1;
+            let date_end = bucket[bucket.len() - 1].1;
 
             // [TODO] insertion sort for speeding up processing
             let vals: Array1<N32> = (ix_start..=ix_end)
@@ -277,16 +278,17 @@ pub fn calculate_stats(
 
             if vals.len() == 0 {
                 stats_functions.iter().for_each(|(stat_name, _)| {
-                    stats.push((stat_name.clone(), NAN));
+                    bucket_stats.push((stat_name.clone(), NAN));
                 });
             } else {
                 stats_functions.iter().for_each(|(stat_name, stat_fn)| {
                     let stat = stat_fn(&vals);
-                    stats.push((stat_name.clone(), stat));
+                    bucket_stats.push((stat_name.clone(), stat));
                 });
             }
-            dates_start.push(date_start);
-            dates_end.push(date_end);
+            stats.push(bucket_stats);
+            dates_start.push(date_start.clone());
+            dates_end.push(date_end.clone());
         }
 
         res.push(FeatureAggregation {

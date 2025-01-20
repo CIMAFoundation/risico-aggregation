@@ -20,3 +20,4 @@ shapefile = { version = "0.6.0", features = ["geo-types"] }
 cftime-rs = { git = "https://github.com/CIMAFoundation/cftime-rs-no-cdylib" }
 kolmogorov_smirnov = "1.1.0"
 ndarray = "0.15.6"
+rusqlite = "0.33.0"

@@ -2,11 +2,11 @@ use chrono::{DateTime, Utc};
 use ndarray::{Array1, Array3};
 use risico_aggregation::{
     calculate_stats, extract_time, get_intersections, max, mean, mean_of_values_above_percentile,
-    min, GeomRecord, Grid, StatsFunction,
+    min, FeatureAggregation, GeomRecord, Grid, StatsFunction,
 };
+use rusqlite::Connection;
 use shapefile::dbase::FieldValue;
 use std::error::Error;
-use std::io::Write;
 use std::time::Instant;
 
 struct NetcdfData {
@@ -98,6 +98,155 @@ fn read_shapefile(shp_file: &str, field: &str) -> Result<Vec<GeomRecord>, Box<dy
     Ok(records)
 }
 
+pub fn __write_to_db(
+    conn: &Connection,
+    features: &Vec<FeatureAggregation>,
+) -> Result<(), Box<dyn Error>> {
+    // Dynamically create column names for the stats variables
+    let stat_columns: Vec<String> = features
+        .first()
+        .unwrap()
+        .stats
+        .first()
+        .unwrap()
+        .iter()
+        .map(|(var_name, _)| var_name.clone())
+        .collect::<Vec<_>>();
+
+    // Build the CREATE TABLE query
+    let create_table_query = format!(
+        "CREATE TABLE IF NOT EXISTS feature_aggregation (
+            name TEXT NOT NULL,
+            date_start TEXT NOT NULL,
+            date_end TEXT NOT NULL,
+            {}
+        )",
+        stat_columns
+            .iter()
+            .map(|col| format!("{} REAL", col))
+            .collect::<Vec<_>>()
+            .join(",\n")
+    );
+
+    conn.execute(&create_table_query, [])?;
+
+    // Build the INSERT INTO query dynamically
+    let insert_query = format!(
+        "INSERT INTO feature_aggregation (name, date_start, date_end, {}) 
+         VALUES (?1, ?2, ?3, {})",
+        stat_columns.join(", "),
+        stat_columns
+            .iter()
+            .enumerate()
+            .map(|(ix, _)| format!("?{}", ix + 4))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    for feature in features {
+        for ((date_start, date_end), stats) in feature
+            .dates_start
+            .iter()
+            .zip(&feature.dates_end)
+            .zip(&feature.stats)
+        {
+            let date_start = &date_start.to_string();
+            let date_end = &date_end.to_string();
+            // print!(
+            //     "Inserting feature: {} with dates: {} - {} and stats: ",
+            //     feature.name, date_start, date_end
+            // );
+            let mut params_vec: Vec<&dyn rusqlite::ToSql> =
+                vec![&feature.name, date_start, date_end];
+
+            for (_, var_value) in stats {
+                // print!("{} ,", &var_value);
+                params_vec.push(var_value);
+            }
+
+            conn.execute(&insert_query, params_vec.as_slice())?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn write_to_db(
+    conn: &mut Connection,
+    features: &Vec<FeatureAggregation>,
+) -> Result<(), Box<dyn Error>> {
+    // Dynamically create column names for the stats variables
+    let stat_columns: Vec<String> = features
+        .first()
+        .unwrap()
+        .stats
+        .first()
+        .unwrap()
+        .iter()
+        .map(|(var_name, _)| var_name.clone())
+        .collect::<Vec<_>>();
+
+    // Build the CREATE TABLE query
+    let create_table_query = format!(
+        "CREATE TABLE IF NOT EXISTS feature_aggregation (
+            name TEXT NOT NULL,
+            date_start TEXT NOT NULL,
+            date_end TEXT NOT NULL,
+            {}
+        )",
+        stat_columns
+            .iter()
+            .map(|col| format!("{} REAL", col))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    conn.execute_batch(&create_table_query)?;
+
+    // Build the INSERT INTO query dynamically
+    let insert_query = format!(
+        "INSERT INTO feature_aggregation (name, date_start, date_end, {}) 
+         VALUES (?1, ?2, ?3, {})",
+        stat_columns.join(", "),
+        stat_columns
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    // Start a transaction for batch insertion
+    let transaction = conn.transaction()?;
+    {
+        let mut stmt = transaction.prepare(&insert_query)?;
+
+        for feature in features {
+            for ((date_start, date_end), stats) in feature
+                .dates_start
+                .iter()
+                .zip(&feature.dates_end)
+                .zip(&feature.stats)
+            {
+                let date_start = date_start.to_rfc3339();
+                let date_end = date_end.to_rfc3339();
+                let mut params_vec: Vec<&dyn rusqlite::ToSql> =
+                    vec![&feature.name, &date_start, &date_end];
+
+                for (_, var_value) in stats {
+                    params_vec.push(var_value);
+                }
+
+                stmt.execute(params_vec.as_slice())?;
+            }
+        }
+    }
+
+    // Commit the transaction
+    transaction.commit()?;
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shp_file = "data/comuni_ISTAT2001.shp";
     let field = "PRO_COM".to_string();
@@ -143,14 +292,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0,
         &functions_map,
     );
+    let res = res.unwrap();
     println!("Calculating stats took {:?}", start.elapsed());
 
-    // dump debug print of res to file
-    let res = res.unwrap();
-    let mut file = std::fs::File::create("output.txt").unwrap();
-    for feature in res {
-        writeln!(file, "{:?}", feature).unwrap();
-    }
+    let start = Instant::now();
+    let mut conn = Connection::open("features.db")?;
+    write_to_db(&mut conn, &res)?;
+    conn.close().or(Err("Failed to close the connection"))?;
+    println!("Writing to db took {:?}", start.elapsed());
 
     Ok(())
 }
