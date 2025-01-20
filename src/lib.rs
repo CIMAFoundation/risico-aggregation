@@ -365,3 +365,415 @@ pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentil
         NAN
     }
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use ndarray::array;
+
+//     #[test]
+//     fn test_grid_new() {
+//         let grid = Grid::new(0.0, 10.0, 0.0, 10.0, 1.0, 1.0);
+//         assert_eq!(grid.n_rows, 11);
+//         assert_eq!(grid.n_cols, 11);
+//     }
+
+//     #[test]
+//     fn test_grid_get_transform() {
+//         let grid = Grid::new(0.0, 10.0, 0.0, 10.0, 1.0, 1.0);
+//         let _transform = grid.get_transform();
+//         // assert_eq!(transform.transform_point(0.0, 0.0), Point::new(0.0, 10.0));
+//     }
+
+//     #[test]
+//     fn test_max() {
+//         let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0)];
+//         assert_eq!(max(&arr), 3.0);
+//     }
+
+//     #[test]
+//     fn test_min() {
+//         let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0)];
+//         assert_eq!(min(&arr), 1.0);
+//     }
+
+//     #[test]
+//     fn test_mean() {
+//         let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0)];
+//         assert_eq!(mean(&arr), 2.0);
+//     }
+
+//     #[test]
+//     fn test_mean_of_values_above_percentile() {
+//         let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0)];
+//         assert_eq!(mean_of_values_above_percentile(&arr, 50), 3.0);
+//     }
+
+//     #[test]
+//     fn test_bucket_times() {
+//         let timeline = array![
+//             #[allow(deprecated)]
+//             Utc.ymd(2020, 1, 1).and_hms(0, 0, 0),
+//             #[allow(deprecated)]
+//             Utc.ymd(2020, 1, 1).and_hms(1, 0, 0),
+//             #[allow(deprecated)]
+//             Utc.ymd(2020, 1, 1).and_hms(2, 0, 0),
+//             #[allow(deprecated)]
+//             Utc.ymd(2020, 1, 1).and_hms(3, 0, 0),
+//         ];
+//         let buckets = bucket_times(&timeline, 2, 0);
+//         assert_eq!(buckets.len(), 2);
+//         assert_eq!(buckets[0].len(), 2);
+//         assert_eq!(buckets[1].len(), 2);
+//     }
+
+//     #[test]
+//     fn test_get_intersections() {
+//         let grid = Grid::new(0.0, 10.0, 0.0, 10.0, 1.0, 1.0);
+//         let records = vec![GeomRecord {
+//             geometry: geo_types::Geometry::Polygon(geo_types::Polygon::new(
+//                 geo_types::LineString::from(vec![
+//                     Point::new(5.0, 5.0),
+//                     Point::new(5.0, 6.0),
+//                     Point::new(6.0, 6.0),
+//                     Point::new(6.0, 5.0),
+//                     Point::new(5.0, 5.0),
+//                 ]),
+//                 vec![],
+//             )),
+//             bbox: GenericBBox {
+//                 min: Point::new(4.0, 4.0),
+//                 max: Point::new(6.0, 6.0),
+//             },
+//             name: "test".to_string(),
+//         }];
+//         let intersections = get_intersections(&grid, records).unwrap();
+//         assert!(intersections.contains_key("test"));
+//     }
+
+//     #[test]
+//     fn test_calculate_stats() {
+//         let data = array![[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]],];
+//         let timeline = array![
+//             // suppress deprecation warning
+//             #[allow(deprecated)]
+//             Utc.ymd(2020, 1, 1).and_hms(0, 0, 0),
+//             #[allow(deprecated)]
+//             Utc.ymd(2020, 1, 1).and_hms(1, 0, 0),
+//         ];
+//         let intersections: IntersectionMap = [("test".to_string(), vec![(0, 0), (1, 1)])]
+//             .iter()
+//             .cloned()
+//             .collect();
+//         let stats_functions = vec![
+//             (
+//                 "max".to_string(),
+//                 Box::new(max) as Box<dyn Fn(&Array1<N32>) -> f32>,
+//             ),
+//             (
+//                 "min".to_string(),
+//                 Box::new(min) as Box<dyn Fn(&Array1<N32>) -> f32>,
+//             ),
+//         ];
+//         let result =
+//             calculate_stats(&data, &timeline, &intersections, 1, 0, &stats_functions).unwrap();
+//         assert_eq!(result.len(), 1);
+//         assert_eq!(result[0].name, "test");
+//         assert_eq!(result[0].stats.len(), 2);
+//     }
+// }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use geo_types::{Coord, Geometry, LineString, Polygon};
+    use ndarray::array;
+    use shapefile::{record::GenericBBox, Point};
+    use std::collections::HashMap;
+
+    // Helper function to create a small 3D data array.
+    // Dimensions: (time, row, col) = (T, R, C)
+    fn create_test_array_3d() -> Array3<f32> {
+        // Let's say we have:
+        // T = 2 time steps,
+        // R = 3 rows,
+        // C = 3 columns.
+        //
+        // We'll fill it with small integer values for easy testing:
+        //
+        // t=0,    t=1
+        // Row0: 1,2,3   Row0: 10,20,30
+        // Row1: 4,5,6   Row1: 40,50,60
+        // Row2: 7,8,9   Row2: 70,80,90
+
+        let mut arr = Array3::<f32>::zeros((2, 3, 3));
+
+        // t=0
+        arr[[0, 0, 0]] = 1.0;
+        arr[[0, 0, 1]] = 2.0;
+        arr[[0, 0, 2]] = 3.0;
+        arr[[0, 1, 0]] = 4.0;
+        arr[[0, 1, 1]] = 5.0;
+        arr[[0, 1, 2]] = 6.0;
+        arr[[0, 2, 0]] = 7.0;
+        arr[[0, 2, 1]] = 8.0;
+        arr[[0, 2, 2]] = 9.0;
+
+        // t=1
+        arr[[1, 0, 0]] = 10.0;
+        arr[[1, 0, 1]] = 20.0;
+        arr[[1, 0, 2]] = 30.0;
+        arr[[1, 1, 0]] = 40.0;
+        arr[[1, 1, 1]] = 50.0;
+        arr[[1, 1, 2]] = 60.0;
+        arr[[1, 2, 0]] = 70.0;
+        arr[[1, 2, 1]] = 80.0;
+        arr[[1, 2, 2]] = 90.0;
+
+        arr
+    }
+
+    // Helper function to create a small timeline: 2 time steps at hours 0 and 1.
+    fn create_test_timeline() -> Array1<DateTime<Utc>> {
+        array![
+            Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2023, 1, 1, 1, 0, 0).unwrap(),
+        ]
+    }
+
+    #[test]
+    fn test_min() {
+        let arr = array![N32::from_f32(5.0), N32::from_f32(-2.0), N32::from_f32(10.0)];
+        assert_eq!(min(&arr), -2.0);
+
+        let empty = ndarray::Array1::<N32>::from_vec(vec![]);
+        assert!(min(&empty).is_nan());
+    }
+
+    #[test]
+    fn test_max() {
+        let arr = array![N32::from_f32(5.0), N32::from_f32(-2.0), N32::from_f32(10.0)];
+        assert_eq!(max(&arr), 10.0);
+
+        let empty = ndarray::Array1::<N32>::from_vec(vec![]);
+        assert!(max(&empty).is_nan());
+    }
+
+    #[test]
+    fn test_mean() {
+        let arr = array![N32::from_f32(4.0), N32::from_f32(6.0), N32::from_f32(10.0)];
+        // mean = (4 + 6 + 10) / 3 = 20 / 3 = 6.6667
+        let computed_mean = mean(&arr);
+        assert!((computed_mean - 6.6667).abs() < 1e-4);
+
+        let empty = ndarray::Array1::<N32>::from_vec(vec![]);
+        assert!(mean(&empty).is_nan());
+    }
+
+    #[test]
+    fn test_mean_of_values_above_percentile() {
+        // 10 values from 1 to 10
+        let arr =
+            ndarray::Array1::<N32>::from_vec((1..=10).map(|v| N32::from_f32(v as f32)).collect());
+
+        // For example, 50th percentile in 1..10 ~ 5.5
+        // So values above 5.5 => {6,7,8,9,10}, mean = 8.0
+        let val = mean_of_values_above_percentile(&arr, 50);
+        assert_eq!(val, 8.0);
+
+        // 90th percentile => ~ 9.1 => values above => {10}, mean = 10
+        let val2 = mean_of_values_above_percentile(&arr, 90);
+        assert_eq!(val2, 10.0);
+
+        // If array is empty
+        let empty = ndarray::Array1::<N32>::from_vec(vec![]);
+        assert!(mean_of_values_above_percentile(&empty, 50).is_nan());
+    }
+
+    #[test]
+    fn test_bucket_times() {
+        // create timeline: [0h, 1h, 2h, 5h, 6h, 7h ...] etc.
+        let timeline = array![
+            Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2023, 1, 1, 1, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2023, 1, 1, 2, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2023, 1, 1, 5, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2023, 1, 1, 6, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2023, 1, 1, 7, 0, 0).unwrap()
+        ];
+
+        // Bucket them by every 2 hours, with offset=0.
+        // So we start a new bucket at hours 0, 2, 4, 6, ...
+        let buckets = super::bucket_times(&timeline, 2, 0);
+
+        // Each bucket is a Vec of (index, DateTime). Let's see how they're formed:
+        // hours in timeline: [0, 1, 2, 5, 6, 7]
+        //
+        // - first bucket: [0h, 1h] -> new bucket at hour=2
+        // - second bucket: [2h]    -> new bucket at hour=4 (which doesn't exist, so next is hour=5)
+        // - third bucket: [5h]     -> new bucket at hour=6
+        // - fourth bucket: [6h, 7h]
+        //
+        // => So we expect 4 buckets:
+        //    Bucket0 => indices [0,1]
+        //    Bucket1 => index [2]
+        //    Bucket2 => index [3]
+        //    Bucket3 => indices [4,5]
+
+        assert_eq!(buckets.len(), 4);
+        assert_eq!(buckets[0].len(), 2); // 0,1
+        assert_eq!(buckets[0][0].0, 0);
+        assert_eq!(buckets[0][1].0, 1);
+
+        assert_eq!(buckets[1].len(), 1); // 2
+        assert_eq!(buckets[2].len(), 1); // 3
+        assert_eq!(buckets[3].len(), 2); // 4,5
+    }
+
+    #[test]
+    fn test_get_intersections() {
+        // 1) Create a grid that covers lat from 0..2 and lon from 0..2, step=1.
+        // => 3 rows x 3 columns
+        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 1.0, 1.0);
+
+        // 2) Create a geometry that covers roughly the top-left corner of the grid:
+        // Let's define a small polygon over lat/lon in [0.0..1.5, 0.0..1.5].
+        let polygon_coords = vec![
+            Coord { x: 0.0, y: 0.0 },
+            Coord { x: 1.5, y: 0.0 },
+            Coord { x: 1.5, y: 1.5 },
+            Coord { x: 0.0, y: 1.5 },
+            Coord { x: 0.0, y: 0.0 },
+        ];
+        let polygon = Polygon::new(LineString::from(polygon_coords), vec![]);
+
+        // For shapefile bounding box
+        let bbox = GenericBBox::<Point> {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(1.5, 1.5),
+        };
+
+        let record = GeomRecord {
+            geometry: Geometry::Polygon(polygon),
+            bbox,
+            name: "TestFeature".to_string(),
+        };
+
+        // 3) Call get_intersections
+        let intersections = get_intersections(&grid, vec![record]).unwrap();
+
+        // We expect that it intersects the following pixel centers
+        // in row,col coordinates:
+        // Row=0 => lat=0..1, Row=1 => lat=1..2
+        // Col=0 => lon=0..1, Col=1 => lon=1..2
+        // Because the shape is 0..1.5 for both lat/lon,
+        // it should partially cover the cells:
+        //    (0,0), (0,1),
+        //    (1,0), (1,1)
+        // The intersection routine is pixel-based, so let's see what we get.
+        //
+        // Usually we'd expect (0,0), (0,1), (1,0), and maybe partial coverage for (1,1).
+        // Because the polygon extends up to 1.5 in lat/lon, the cell with row=1,col=1
+        // might also be included depending on the rasterization approach.
+        // The exact set can vary, but let's check for at least a subset.
+
+        let coords = intersections.get("TestFeature").unwrap();
+        // Typically we might see something like:
+        //    coords = [(0,0), (0,1), (1,0), (1,1)]
+        // The exact set can differ if partial coverage is handled differently.
+        // Let's at least assert it's non-empty and includes (0,0).
+        assert!(coords.len() > 0);
+        assert!(coords.contains(&(0, 0)));
+    }
+
+    #[test]
+    fn test_calculate_stats() {
+        let data_3d = create_test_array_3d();
+        let timeline = create_test_timeline();
+
+        // Create a simple Grid: lat=0..2, lon=0..2, step=1 => 3 rows, 3 cols
+        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 1.0, 1.0);
+
+        // We create a single polygon that covers row=0..1, col=0..1 in pixel space.
+        let polygon_coords = vec![
+            Coord { x: 0.0, y: 0.0 },
+            Coord { x: 1.5, y: 0.0 },
+            Coord { x: 1.5, y: 1.5 },
+            Coord { x: 0.0, y: 1.5 },
+            Coord { x: 0.0, y: 0.0 },
+        ];
+        let polygon = Polygon::new(LineString::from(polygon_coords), vec![]);
+        let bbox = GenericBBox::<Point> {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(1.5, 1.5),
+        };
+
+        let record = GeomRecord {
+            geometry: Geometry::Polygon(polygon),
+            bbox,
+            name: "TestFeature".to_string(),
+        };
+
+        let intersections = get_intersections(&grid, vec![record]).unwrap();
+        // We'll define some stats functions
+        let stats_functions: Vec<StatsFunction> = vec![
+            (
+                "min".into(),
+                Box::new(min) as Box<dyn Fn(&ndarray::Array1<N32>) -> f32>,
+            ),
+            ("max".into(), Box::new(max)),
+            ("mean".into(), Box::new(mean)),
+        ];
+
+        // Bucket times with resolution=1 => each time step is its own bucket
+        let hours_resolution = 1;
+        let hours_offset = 0;
+
+        let feature_aggregations = calculate_stats(
+            &data_3d,
+            &timeline,
+            &intersections,
+            hours_resolution,
+            hours_offset,
+            &stats_functions,
+        )
+        .unwrap();
+
+        // We have just 1 feature => "TestFeature"
+        assert_eq!(feature_aggregations.len(), 1);
+        let agg = &feature_aggregations[0];
+        assert_eq!(agg.name, "TestFeature");
+
+        // Because resolution=1, we expect the same number of "stats" entries as time steps = 2
+        assert_eq!(agg.stats.len(), 2);
+
+        // For time step 0, row=0..1,col=0..1 => data at:
+        //  data[[0,0,0]] = 1.0, data[[0,0,1]] = 2.0, data[[0,1,0]] = 4.0, data[[0,1,1]] = 5.0
+        //
+        // => min=1, max=5, mean= (1+2+4+5)/4=3.0
+        let stats_bucket_0 = &agg.stats[0];
+        // It's a Vec<(String, f32)>, in order: [("min", 1.0), ("max", 5.0), ("mean", 3.0)]
+        let mut map_0 = HashMap::new();
+        for (key, val) in stats_bucket_0 {
+            map_0.insert(key.clone(), *val);
+        }
+        assert_eq!(map_0["min"], 1.0);
+        assert_eq!(map_0["max"], 5.0);
+        assert!((map_0["mean"] - 3.0).abs() < 1e-6);
+
+        // For time step 1, row=0..1,col=0..1 => data at:
+        //  data[[1,0,0]] = 10.0, data[[1,0,1]] = 20.0,
+        //  data[[1,1,0]] = 40.0, data[[1,1,1]] = 50.0
+        //
+        // => min=10, max=50, mean=(10+20+40+50)/4 = 30.0
+        let stats_bucket_1 = &agg.stats[1];
+        let mut map_1 = HashMap::new();
+        for (key, val) in stats_bucket_1 {
+            map_1.insert(key.clone(), *val);
+        }
+        assert_eq!(map_1["min"], 10.0);
+        assert_eq!(map_1["max"], 50.0);
+        assert!((map_1["mean"] - 30.0).abs() < 1e-6);
+    }
+}
