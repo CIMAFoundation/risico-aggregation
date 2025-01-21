@@ -275,7 +275,7 @@ fn process(
         &intersections,
         resolution,
         offset,
-        &functions,
+        functions,
     )?;
 
     println!("Calculating stats took {:?}", start.elapsed());
