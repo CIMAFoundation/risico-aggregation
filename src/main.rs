@@ -66,9 +66,9 @@ fn read_netcdf(nc_file: &PathBuf, variable: &str) -> Result<NetcdfData, Box<dyn 
         .variable("time")
         .ok_or("Could not find variable 'time'")?;
 
-    let timeline = extract_time(&time)?;
+    let timeline = extract_time(time)?;
     let var = &nc_file
-        .variable(&variable)
+        .variable(variable)
         .ok_or(format!("Missing variable {variable}"))?;
 
     let lats = lats.values::<f32>(None, None)?;
@@ -104,7 +104,7 @@ fn read_shapefile(shp_file: &PathBuf, field: &str) -> Result<Vec<GeomRecord>, Bo
         .iter_shapes_and_records()
         .filter_map(Result::ok)
         .filter_map(|(shape, record)| {
-            let name = match record.get(&field) {
+            let name = match record.get(field) {
                 Some(FieldValue::Numeric(Some(name))) => name.to_string(),
                 Some(FieldValue::Character(Some(name))) => name.to_owned(),
                 Some(_) => return None,
@@ -123,7 +123,7 @@ fn read_shapefile(shp_file: &PathBuf, field: &str) -> Result<Vec<GeomRecord>, Bo
 
             Some(GeomRecord {
                 geometry,
-                bbox: bbox.clone(),
+                bbox: *bbox,
                 name,
             })
         })
@@ -216,7 +216,7 @@ fn process(
     println!("Reading netcdf took {:?}", start.elapsed());
 
     let start = Instant::now();
-    let records = read_shapefile(shp_file, &field)?;
+    let records = read_shapefile(shp_file, field)?;
     println!("Reading shapefile took {:?}", start.elapsed());
 
     let start = Instant::now();

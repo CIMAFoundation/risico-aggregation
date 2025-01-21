@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::f32::NAN;
+
 use std::{error::Error, marker::PhantomData};
 
 use cftime_rs::calendars::Calendar;
@@ -33,7 +33,6 @@ const NODATA: f32 = -9999.0;
 #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, EnumString, Display)]
 #[strum(ascii_case_insensitive)]
-
 pub enum StatsFunctionType {
     MIN,
     MAX,
@@ -240,9 +239,9 @@ pub fn get_intersections(
                 return (name, vec![]);
             }
 
-            let min_col = usize::clamp(min_col as usize, 0, n_cols - 1);
+            let min_col = usize::clamp(min_col, 0, n_cols - 1);
             let max_col = usize::clamp(max_col as usize, 0, n_cols - 1);
-            let min_row = usize::clamp(min_row as usize, 0, n_rows - 1);
+            let min_row = usize::clamp(min_row, 0, n_rows - 1);
             let max_row = usize::clamp(max_row as usize, 0, n_rows - 1);
 
             let coords = (min_row..=max_row)
@@ -298,7 +297,7 @@ pub fn calculate_stats(
     intersections: &IntersectionMap,
     hours_resolution: u32,
     hours_offset: u32,
-    stats_functions: &Vec<StatsFunctionType>,
+    stats_functions: &[StatsFunctionType],
 ) -> Result<Vec<FeatureAggregation>, Box<dyn Error>> {
     let buckets = bucket_times(timeline, hours_resolution, hours_offset);
 
@@ -321,12 +320,12 @@ pub fn calculate_stats(
                 .flat_map(|t_ix| coords.iter().map(move |(row, col)| (t_ix, *row, *col)))
                 .map(|(t_ix, row, col)| data[[t_ix, row, col]])
                 .filter(|x| *x != NODATA && !x.is_nan())
-                .map(|x| N32::from_f32(x))
+                .map(N32::from_f32)
                 .collect();
 
-            if vals.len() == 0 {
+            if vals.is_empty() {
                 stats_functions.iter().for_each(|stat_fun_type| {
-                    bucket_stats.push((stat_fun_type.to_string(), NAN));
+                    bucket_stats.push((stat_fun_type.to_string(), f32::NAN));
                 });
             } else {
                 stats_functions.iter().for_each(|&stat_fun_type| {
@@ -336,8 +335,8 @@ pub fn calculate_stats(
                 });
             }
             stats.push(bucket_stats);
-            dates_start.push(date_start.clone());
-            dates_end.push(date_end.clone());
+            dates_start.push(*date_start);
+            dates_end.push(*date_end);
         }
 
         res.push(FeatureAggregation {
@@ -352,47 +351,47 @@ pub fn calculate_stats(
 }
 
 pub fn max(arr: &ndarray::Array1<N32>) -> f32 {
-    if arr.len() == 0 {
-        return NAN;
+    if arr.is_empty() {
+        return f32::NAN;
     }
 
     let maybe_max = arr.iter().max();
     if let Some(max) = maybe_max {
         (*max).into()
     } else {
-        NAN
+        f32::NAN
     }
 }
 
 pub fn min(arr: &ndarray::Array1<N32>) -> f32 {
-    if arr.len() == 0 {
-        return NAN;
+    if arr.is_empty() {
+        return f32::NAN;
     }
 
     let maybe_min = arr.iter().min();
     if let Some(min) = maybe_min {
         (*min).into()
     } else {
-        NAN
+        f32::NAN
     }
 }
 
 pub fn mean(arr: &ndarray::Array1<N32>) -> f32 {
-    if arr.len() == 0 {
-        return NAN;
+    if arr.is_empty() {
+        return f32::NAN;
     }
 
     let maybe_mean = arr.mean();
     if let Some(mean) = maybe_mean {
         mean.into()
     } else {
-        NAN
+        f32::NAN
     }
 }
 
 pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentile: u8) -> f32 {
-    if arr.len() == 0 {
-        return NAN;
+    if arr.is_empty() {
+        return f32::NAN;
     }
 
     let slice = arr.as_slice().expect("Could not get slice");
@@ -400,24 +399,23 @@ pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentil
 
     let over_threshold = arr
         .iter()
-        .filter(|&x| *x >= perc_value)
-        .map(|&x| x)
+        .filter(|&x| *x >= perc_value).copied()
         .collect::<Array1<N32>>();
 
-    if over_threshold.len() == 0 {
-        return NAN;
+    if over_threshold.is_empty() {
+        return f32::NAN;
     }
     let maybe_mean = over_threshold.mean();
     if let Some(mean) = maybe_mean {
         mean.into()
     } else {
-        NAN
+        f32::NAN
     }
 }
 
 pub fn mean_of_values_below_percentile(arr: &ndarray::Array1<N32>, the_percentile: u8) -> f32 {
-    if arr.len() == 0 {
-        return NAN;
+    if arr.is_empty() {
+        return f32::NAN;
     }
 
     let slice = arr.as_slice().expect("Could not get slice");
@@ -425,18 +423,17 @@ pub fn mean_of_values_below_percentile(arr: &ndarray::Array1<N32>, the_percentil
 
     let below_threshold = arr
         .iter()
-        .filter(|&x| *x < perc_value)
-        .map(|&x| x)
+        .filter(|&x| *x < perc_value).copied()
         .collect::<Array1<N32>>();
 
-    if below_threshold.len() == 0 {
-        return NAN;
+    if below_threshold.is_empty() {
+        return f32::NAN;
     }
     let maybe_mean = below_threshold.mean();
     if let Some(mean) = maybe_mean {
         mean.into()
     } else {
-        NAN
+        f32::NAN
     }
 }
 
@@ -666,7 +663,7 @@ mod tests {
         //    coords = [(0,0), (0,1), (1,0), (1,1)]
         // The exact set can differ if partial coverage is handled differently.
         // Let's at least assert it's non-empty and includes (0,0).
-        assert!(coords.len() > 0);
+        assert!(!coords.is_empty());
         assert!(coords.contains(&(0, 0)));
         assert!(coords.contains(&(0, 1)));
         assert!(coords.contains(&(1, 0)));
