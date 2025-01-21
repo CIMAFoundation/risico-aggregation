@@ -706,13 +706,10 @@ mod tests {
 
         let intersections = get_intersections(&grid, vec![record]).unwrap();
         // We'll define some stats functions
-        let stats_functions: Vec<StatsFunctionTuple> = vec![
-            (
-                "min".into(),
-                Box::new(min) as Box<dyn Fn(&ndarray::Array1<N32>) -> f32>,
-            ),
-            ("max".into(), Box::new(max)),
-            ("mean".into(), Box::new(mean)),
+        let stats_functions: Vec<StatsFunctionType> = vec![
+            super::StatsFunctionType::MIN,
+            super::StatsFunctionType::MEAN,
+            super::StatsFunctionType::MAX,
         ];
 
         // Bucket times with resolution=1 => each time step is its own bucket
@@ -747,9 +744,9 @@ mod tests {
         for (key, val) in stats_bucket_0 {
             map_0.insert(key.clone(), *val);
         }
-        assert_eq!(map_0["min"], 1.0);
-        assert_eq!(map_0["max"], 5.0);
-        assert!((map_0["mean"] - 3.0).abs() < 1e-6);
+        assert_eq!(map_0["MIN"], 1.0);
+        assert_eq!(map_0["MAX"], 5.0);
+        assert!((map_0["MEAN"] - 3.0).abs() < 1e-6);
 
         // For time step 1, row=0..1,col=0..1 => data at:
         //  data[[1,0,0]] = 10.0, data[[1,0,1]] = 20.0,
@@ -761,8 +758,8 @@ mod tests {
         for (key, val) in stats_bucket_1 {
             map_1.insert(key.clone(), *val);
         }
-        assert_eq!(map_1["min"], 10.0);
-        assert_eq!(map_1["max"], 50.0);
-        assert!((map_1["mean"] - 30.0).abs() < 1e-6);
+        assert_eq!(map_1["MIN"], 10.0);
+        assert_eq!(map_1["MAX"], 50.0);
+        assert!((map_1["MEAN"] - 30.0).abs() < 1e-6);
     }
 }

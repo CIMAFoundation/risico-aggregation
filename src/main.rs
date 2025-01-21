@@ -9,16 +9,38 @@ use risico_aggregation::{
 use rusqlite::Connection;
 use shapefile::dbase::FieldValue;
 use std::error::Error;
+use std::path::PathBuf;
 use std::time::Instant;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    shp_file: String,
+    #[clap(help = "Path to the shapefile")]
+    shp_file: PathBuf,
+
+    #[clap(help = "Name of the field to use as the id of the feature")]
     field: String,
-    nc_file: String,
+
+    #[clap(help = "Path to the netcdf file")]
+    nc_file: PathBuf,
+
+    #[clap(help = "Name of the variable to extract")]
     variable: String,
+
+    #[clap(value_delimiter = ',', help = "List of stats functions to apply")]
     stats: Vec<StatsFunctionType>,
+
+    #[clap(long, help = "Name of the table to write the results to")]
+    table: Option<String>,
+
+    #[clap(long, default_value = "24", help = "Resolution in hours")]
+    resolution: u32,
+
+    #[clap(long, default_value = "0", help = "Offset in hours")]
+    offset: u32,
+
+    #[clap(long, help = "Path to the output file", default_value = "cache.db")]
+    output: PathBuf,
 }
 
 struct NetcdfData {
@@ -27,7 +49,7 @@ struct NetcdfData {
     grid: Grid,
 }
 
-fn read_netcdf(nc_file: &str, variable: &str) -> Result<NetcdfData, Box<dyn Error>> {
+fn read_netcdf(nc_file: &PathBuf, variable: &str) -> Result<NetcdfData, Box<dyn Error>> {
     let nc_file = netcdf::open(nc_file)?;
 
     let lats = &nc_file
@@ -76,7 +98,7 @@ fn read_netcdf(nc_file: &str, variable: &str) -> Result<NetcdfData, Box<dyn Erro
     })
 }
 
-fn read_shapefile(shp_file: &str, field: &str) -> Result<Vec<GeomRecord>, Box<dyn Error>> {
+fn read_shapefile(shp_file: &PathBuf, field: &str) -> Result<Vec<GeomRecord>, Box<dyn Error>> {
     let mut reader = shapefile::Reader::from_path(shp_file)?;
     let records: Vec<_> = reader
         .iter_shapes_and_records()
@@ -110,121 +132,38 @@ fn read_shapefile(shp_file: &str, field: &str) -> Result<Vec<GeomRecord>, Box<dy
     Ok(records)
 }
 
-pub fn __write_to_db(
-    conn: &Connection,
-    features: &Vec<FeatureAggregation>,
-) -> Result<(), Box<dyn Error>> {
-    // Dynamically create column names for the stats variables
-    let stat_columns: Vec<String> = features
-        .first()
-        .unwrap()
-        .stats
-        .first()
-        .unwrap()
-        .iter()
-        .map(|(var_name, _)| var_name.clone())
-        .collect::<Vec<_>>();
-
-    // Build the CREATE TABLE query
-    let create_table_query = format!(
-        "CREATE TABLE IF NOT EXISTS feature_aggregation (
-            name TEXT NOT NULL,
-            date_start TEXT NOT NULL,
-            date_end TEXT NOT NULL,
-            {}
-        )",
-        stat_columns
-            .iter()
-            .map(|col| format!("{} REAL", col))
-            .collect::<Vec<_>>()
-            .join(",\n")
-    );
-
-    conn.execute(&create_table_query, [])?;
-
-    // Build the INSERT INTO query dynamically
-    let insert_query = format!(
-        "INSERT INTO feature_aggregation (name, date_start, date_end, {}) 
-         VALUES (?1, ?2, ?3, {})",
-        stat_columns.join(", "),
-        stat_columns
-            .iter()
-            .enumerate()
-            .map(|(ix, _)| format!("?{}", ix + 4))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-
-    for feature in features {
-        for ((date_start, date_end), stats) in feature
-            .dates_start
-            .iter()
-            .zip(&feature.dates_end)
-            .zip(&feature.stats)
-        {
-            let date_start = &date_start.to_string();
-            let date_end = &date_end.to_string();
-            // print!(
-            //     "Inserting feature: {} with dates: {} - {} and stats: ",
-            //     feature.name, date_start, date_end
-            // );
-            let mut params_vec: Vec<&dyn rusqlite::ToSql> =
-                vec![&feature.name, date_start, date_end];
-
-            for (_, var_value) in stats {
-                // print!("{} ,", &var_value);
-                params_vec.push(var_value);
-            }
-
-            conn.execute(&insert_query, params_vec.as_slice())?;
-        }
-    }
-
-    Ok(())
-}
-
 pub fn write_to_db(
     conn: &mut Connection,
     features: &Vec<FeatureAggregation>,
+    table: &str,
+    hours_resolution: u32,
+    hours_offset: u32,
 ) -> Result<(), Box<dyn Error>> {
-    // Dynamically create column names for the stats variables
-    let stat_columns: Vec<String> = features
-        .first()
-        .unwrap()
-        .stats
-        .first()
-        .unwrap()
-        .iter()
-        .map(|(var_name, _)| var_name.clone())
-        .collect::<Vec<_>>();
-
     // Build the CREATE TABLE query
     let create_table_query = format!(
-        "CREATE TABLE IF NOT EXISTS feature_aggregation (
+        "CREATE TABLE IF NOT EXISTS {} (
             name TEXT NOT NULL,
             date_start TEXT NOT NULL,
             date_end TEXT NOT NULL,
-            {}
+            variable TEXT NOT NULL,
+            resolution_hours INTEGER,
+            offset_hours INTEGER,
+            value REAL,
+            UNIQUE(name, date_start, date_end, variable, resolution_hours, offset_hours)
         )",
-        stat_columns
-            .iter()
-            .map(|col| format!("{} REAL", col))
-            .collect::<Vec<_>>()
-            .join(", ")
+        table
     );
 
     conn.execute_batch(&create_table_query)?;
 
-    // Build the INSERT INTO query dynamically
+    // Build the INSERT INTO query dynamically with ON CONFLICT clause
     let insert_query = format!(
-        "INSERT INTO feature_aggregation (name, date_start, date_end, {}) 
-         VALUES (?1, ?2, ?3, {})",
-        stat_columns.join(", "),
-        stat_columns
-            .iter()
-            .map(|_| "?")
-            .collect::<Vec<_>>()
-            .join(", ")
+        "INSERT INTO {}         
+        (name, date_start, date_end, variable, resolution_hours, offset_hours, value)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        ON CONFLICT(name, date_start, date_end, variable, resolution_hours, offset_hours)
+        DO UPDATE SET value = excluded.value",
+        table
     );
 
     // Start a transaction for batch insertion
@@ -241,18 +180,22 @@ pub fn write_to_db(
             {
                 let date_start = date_start.to_rfc3339();
                 let date_end = date_end.to_rfc3339();
-                let mut params_vec: Vec<&dyn rusqlite::ToSql> =
-                    vec![&feature.name, &date_start, &date_end];
 
-                for (_, var_value) in stats {
-                    params_vec.push(var_value);
+                for (var_name, var_value) in stats {
+                    let params_vec: Vec<&dyn rusqlite::ToSql> = vec![
+                        &feature.name,
+                        &date_start,
+                        &date_end,
+                        var_name,
+                        &hours_resolution,
+                        &hours_offset,
+                        var_value,
+                    ];
+                    stmt.execute(params_vec.as_slice())?;
                 }
-
-                stmt.execute(params_vec.as_slice())?;
             }
         }
     }
-
     // Commit the transaction
     transaction.commit()?;
 
@@ -260,12 +203,14 @@ pub fn write_to_db(
 }
 
 fn process(
-    shp_file: &str,
+    shp_file: &PathBuf,
     field: &str,
-    nc_file: &str,
+    nc_file: &PathBuf,
     variable: &str,
+    resolution: u32,
+    offset: u32,
     functions: Vec<StatsFunctionType>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Vec<FeatureAggregation>, Box<dyn std::error::Error>> {
     let start = Instant::now();
     let netcdf_data = read_netcdf(nc_file, variable)?;
     println!("Reading netcdf took {:?}", start.elapsed());
@@ -283,34 +228,51 @@ fn process(
         &netcdf_data.data,
         &netcdf_data.timeline,
         &intersections,
-        24,
-        0,
+        resolution,
+        offset,
         &functions,
-    );
-    let res = res.unwrap();
+    )?;
+
     println!("Calculating stats took {:?}", start.elapsed());
 
-    let start = Instant::now();
-    let mut conn = Connection::open("features.db")?;
-    write_to_db(&mut conn, &res)?;
-    conn.close().or(Err("Failed to close the connection"))?;
-    println!("Writing to db took {:?}", start.elapsed());
-
-    Ok(())
+    Ok(res)
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    println!("{:?}", args);
 
     let shp_file = args.shp_file;
     let field = args.field;
     let nc_file = args.nc_file;
     let variable = args.variable;
+    let resolution = args.resolution;
+    let offset = args.offset;
+
+    let table = match args.table {
+        Some(table) => table,
+        None => {
+            // generate default table name by combining
+            // shapefile name, the id field, the resolution and offset and the variable
+            let shp_file_name = shp_file.file_stem().unwrap().to_str().unwrap();
+            format!(
+                "{}_{}_{}_{}_{}",
+                shp_file_name, field, variable, resolution, offset
+            )
+        }
+    };
 
     let functions = args.stats;
 
-    match process(&shp_file, &field, &nc_file, &variable, functions) {
-        Ok(_) => println!("Success"),
-        Err(e) => eprintln!("Error: {}", e),
-    }
+    let results = process(
+        &shp_file, &field, &nc_file, &variable, resolution, offset, functions,
+    )?;
+
+    let start = Instant::now();
+    let mut conn = Connection::open(&args.output)?;
+    write_to_db(&mut conn, &results, &table, resolution, offset)?;
+    conn.close().or(Err("Failed to close the connection"))?;
+    println!("Writing to db took {:?}", start.elapsed());
+
+    Ok(())
 }
