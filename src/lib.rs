@@ -30,6 +30,8 @@ pub type StatsFunctionTuple = (String, StatFunction);
 
 const NODATA: f32 = -9999.0;
 
+/// Enum to represent the type of statistics function to be applied
+/// to the data.
 #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, EnumString, Display)]
 #[strum(ascii_case_insensitive)]
@@ -49,6 +51,32 @@ pub enum StatsFunctionType {
     IPERC1,
 }
 
+/// Get the appropriate statistic function based on the type.
+/// The function is returned as a boxed trait object.
+/// This is useful for storing different functions in a single
+/// data structure.
+///
+/// # Arguments
+///
+/// * `stat` - The type of statistic function to get.
+///
+/// # Returns
+///
+/// A boxed trait object that implements the `Fn` trait.
+///
+/// # Example
+///
+/// ```
+/// use risico_aggregation::get_stat_function;
+/// use risico_aggregation::StatsFunctionType;
+/// use noisy_float::types::N32;
+///
+/// let stat_fn = get_stat_function(StatsFunctionType::MIN);
+///
+/// let data: ndarray::Array1<N32> = ndarray::Array1::from_vec(vec![1.0, 2.0, 3.0]).mapv(N32::from_f32);
+/// let min_val = stat_fn(&data);
+/// assert_eq!(min_val, 1.0);
+/// ```
 pub fn get_stat_function(stat: StatsFunctionType) -> StatFunction {
     match stat {
         StatsFunctionType::MIN => Box::new(min),
@@ -67,27 +95,51 @@ pub fn get_stat_function(stat: StatsFunctionType) -> StatFunction {
     }
 }
 
+/// A struct to hold the aggregated statistics for a feature.
 #[derive(Debug)]
 pub struct FeatureAggregation {
+    /// The name of the feature
     pub name: String,
+    /// The statistics for each time step and variable
     pub stats: Vec<Vec<(String, f32)>>,
+    /// The start date for each time step
     pub dates_start: Vec<DateTime<Utc>>,
+    /// The end date for each time step
     pub dates_end: Vec<DateTime<Utc>>,
 }
 
+/// A struct to hold the grid information.
 #[derive(Debug)]
 pub struct Grid {
+    /// The minimum latitude
     pub min_lat: f64,
+    /// The maximum latitude
     pub max_lat: f64,
+    /// The minimum longitude
     pub min_lon: f64,
+    /// The maximum longitude
     pub max_lon: f64,
+    /// The latitude step
     pub lat_step: f64,
+    /// The longitude step
     pub lon_step: f64,
+    /// The number of rows
     pub n_rows: usize,
+    /// The number of columns
     pub n_cols: usize,
 }
 
 impl Grid {
+    /// Create a new grid with the given parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `min_lat` - The minimum latitude
+    /// * `max_lat` - The maximum latitude
+    /// * `min_lon` - The minimum longitude
+    /// * `max_lon` - The maximum longitude
+    /// * `lat_step` - The latitude step
+    /// * `lon_step` - The longitude step
     pub fn new(
         min_lat: f64,
         max_lat: f64,
@@ -110,6 +162,12 @@ impl Grid {
         }
     }
 
+    /// Get the transform matrix for the grid.
+    ///
+    /// # Returns
+    ///
+    /// A `Transform` object that represents the transform matrix between coordinates space and pixel space.
+    ///
     pub fn get_transform(&self) -> Transform {
         Transform::new(
             self.lon_step,
@@ -122,14 +180,26 @@ impl Grid {
     }
 }
 
+/// A struct to hold the geometry record for a feature
 #[derive(Debug)]
 pub struct GeomRecord {
+    /// The geometry
     pub geometry: geo_types::Geometry<f64>,
+    /// The bounding box
     pub bbox: GenericBBox<Point>,
+    /// The name of the feature
     pub name: String,
 }
 
-// extract the time from a netcdf file using the given attribute
+/// Extract the time variable from the NetCDF file.
+///
+/// # Arguments
+///
+/// * `time_var` - The time variable
+///
+/// # Returns
+///
+/// A `Result` containing the array of `DateTime<Utc>` values or an error.
 pub fn extract_time(time_var: &Variable) -> Result<Array1<DateTime<Utc>>, Box<dyn Error>> {
     let time_units_attr_name: String = String::from("units");
 
@@ -182,13 +252,84 @@ pub fn extract_time(time_var: &Variable) -> Result<Array1<DateTime<Utc>>, Box<dy
     Ok(timeline)
 }
 
+/// Get the intersections between the geometries and the grid.
+///
+/// # Arguments
+///
+/// * `grid` - The grid
+/// * `records` - The geometry records
+///
+/// # Returns
+///
+/// A `Result` containing the intersection map or an error.
+///
+/// # Example
+///
+/// ```
+/// use risico_aggregation::{GeomRecord, Grid, get_intersections};
+/// use geo_types::{Coord, Geometry, LineString, Polygon};
+/// use shapefile::Point;
+/// use shapefile::record::GenericBBox;
+///
+/// // 1) Create a grid that covers lat from 0..2 and lon from 0..2, step=1.
+/// // => 3 rows x 3 columns
+/// let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 1.0, 1.0);
+///
+/// // 2) Create a geometry that covers roughly the top-left corner of the grid:
+/// // Let's define a small polygon over lat/lon in [0.0..1.5, 0.0..1.5].
+/// let polygon_coords = vec![
+///     Coord { x: 0.0, y: 0.0 },
+///     Coord { x: 1.5, y: 0.0 },
+///     Coord { x: 1.5, y: 1.5 },
+///     Coord { x: 0.0, y: 1.5 },
+///     Coord { x: 0.0, y: 0.0 },
+///  ];
+///  let polygon = Polygon::new(LineString::from(polygon_coords), vec![]);
+///
+///  // For shapefile bounding box
+///  let bbox = GenericBBox::<Point> {
+///      min: Point::new(0.0, 0.0),
+///      max: Point::new(1.5, 1.5),
+///  };
+///
+///  let record = GeomRecord {
+///     geometry: Geometry::Polygon(polygon),
+///     bbox,
+///     name: "TestFeature".to_string(),
+///  };
+///
+///  // Call get_intersections
+///  let intersections = get_intersections(&grid, vec![record]).unwrap();
+///
+///  // We expect that it intersects the following pixel centers
+///  // in row,col coordinates:
+///  // Row=0 => lat=0..1, Row=1 => lat=1..2
+///  // Col=0 => lon=0..1, Col=1 => lon=1..2
+///  // Because the shape is 0..1.5 for both lat/lon,
+///  // it should partially cover the cells:
+///  //    (0,0), (0,1),
+///  //    (1,0), (1,1)
+///  // The intersection routine is pixel-based, so let's see what we get.
+///  //
+///
+///  let coords = intersections.get("TestFeature").unwrap();
+///  // Typically we might see something like:
+///  //    coords = [(0,0), (0,1), (1,0), (1,1)]
+///  // The exact set can differ if partial coverage is handled differently.
+///  // Let's at least assert it's non-empty and includes (0,0).
+///  assert!(!coords.is_empty());
+///  assert!(coords.contains(&(0, 0)));
+///  assert!(coords.contains(&(0, 1)));
+///  assert!(coords.contains(&(1, 0)));
+///  assert!(coords.contains(&(1, 1)));
+///  assert!(!coords.contains(&(0, 2)));
+///  assert!(!coords.contains(&(2, 0)));
+///  assert!(!coords.contains(&(2, 2)));
+/// ```
 pub fn get_intersections(
     grid: &Grid,
     records: Vec<GeomRecord>,
 ) -> Result<IntersectionMap, Box<dyn Error>> {
-    // Get the variable in this file with the name "data"
-
-    // generate transform matrix in gdal format
     let pix_to_geo = grid.get_transform();
     let geo_to_pix = pix_to_geo
         .inverse()
@@ -255,7 +396,6 @@ pub fn get_intersections(
 
     let mut intersections: IntersectionMap = HashMap::new();
 
-    // fill the hashmap
     for (name, coords) in name_and_coords {
         intersections.insert(name.into(), coords);
     }
@@ -263,6 +403,43 @@ pub fn get_intersections(
     Ok(intersections)
 }
 
+/// Bucket the times into groups based on the resolution and offset.
+///
+/// # Arguments
+///
+/// * `timeline` - The timeline
+/// * `hours_resolution` - The resolution in hours
+/// * `hours_offset` - The offset in hours
+///
+/// # Returns
+///
+/// A vector of vectors containing the indices and the times.
+///
+/// # Example
+///
+/// ```
+/// use risico_aggregation::bucket_times;
+/// use chrono::{DateTime, TimeZone, Utc};
+/// use ndarray::{Array1, array};
+///
+/// let timeline = array![Utc.with_ymd_and_hms(2023, 1, 1, 1, 0, 0).unwrap(), Utc.with_ymd_and_hms(2023, 1, 1, 2, 0, 0).unwrap(), Utc.with_ymd_and_hms(2023, 1, 1, 3, 0, 0).unwrap(),Utc.with_ymd_and_hms(2023, 1, 1, 4, 0, 0).unwrap(),Utc.with_ymd_and_hms(2023, 1, 1, 5, 0, 0).unwrap(),Utc.with_ymd_and_hms(2023, 1, 1, 6, 0, 0).unwrap(),Utc.with_ymd_and_hms(2023, 1, 1, 7, 0, 0).unwrap(),Utc.with_ymd_and_hms(2023, 1, 1, 8, 0, 0).unwrap()];
+///
+/// let result = bucket_times(&timeline, 2, 0);
+///
+/// // We only check indices here for brevity:
+///
+/// let indices: Vec<Vec<usize>> = result
+///    .iter()
+///   .map(|group| group.iter().map(|(i, _)| *i).collect())
+///  .collect();
+///
+/// // Expect: [[0,1], [2,3], [4,5], [6,7]]
+/// assert_eq!(
+///    indices,
+///   vec![vec![0, 1], vec![2, 3], vec![4, 5], vec![6, 7]],
+/// );
+///
+/// ```
 pub fn bucket_times(
     timeline: &Array1<DateTime<Utc>>,
     hours_resolution: u32,
@@ -399,7 +576,8 @@ pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentil
 
     let over_threshold = arr
         .iter()
-        .filter(|&x| *x >= perc_value).copied()
+        .filter(|&x| *x >= perc_value)
+        .copied()
         .collect::<Array1<N32>>();
 
     if over_threshold.is_empty() {
@@ -423,7 +601,8 @@ pub fn mean_of_values_below_percentile(arr: &ndarray::Array1<N32>, the_percentil
 
     let below_threshold = arr
         .iter()
-        .filter(|&x| *x < perc_value).copied()
+        .filter(|&x| *x < perc_value)
+        .copied()
         .collect::<Array1<N32>>();
 
     if below_threshold.is_empty() {

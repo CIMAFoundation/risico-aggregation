@@ -43,12 +43,24 @@ struct Args {
     output: PathBuf,
 }
 
+/// Struct to hold the data extracted from the netcdf file
 struct NetcdfData {
     data: Array3<f32>,
     timeline: Array1<DateTime<Utc>>,
     grid: Grid,
 }
 
+/// Read the netcdf file and extract the data and the timeline
+/// The function returns a NetcdfData struct containing the data, the timeline and the grid
+///
+/// # Arguments
+///
+/// * `nc_file` - Path to the netcdf file
+/// * `variable` - Name of the variable to extract
+///
+/// # Returns
+///
+/// A Result containing a NetcdfData struct or an error
 fn read_netcdf(nc_file: &PathBuf, variable: &str) -> Result<NetcdfData, Box<dyn Error>> {
     let nc_file = netcdf::open(nc_file)?;
 
@@ -98,6 +110,19 @@ fn read_netcdf(nc_file: &PathBuf, variable: &str) -> Result<NetcdfData, Box<dyn 
     })
 }
 
+/// Read the shapefile and extract the geometries
+/// and the field specified by the user
+/// The geometries are converted to geo_types::Geometry
+/// and the field is converted to a String
+/// The function returns a Vec of GeomRecord
+/// which contains the geometry, the bounding box and the name
+/// of the feature
+/// The function returns an error if the shapefile cannot be read or if the field is not found in the shapefile
+///
+/// # Arguments
+///
+/// * `shp_file` - Path to the shapefile
+/// * `field` - Name of the field to extract
 fn read_shapefile(shp_file: &PathBuf, field: &str) -> Result<Vec<GeomRecord>, Box<dyn Error>> {
     let mut reader = shapefile::Reader::from_path(shp_file)?;
     let records: Vec<_> = reader
@@ -132,6 +157,7 @@ fn read_shapefile(shp_file: &PathBuf, field: &str) -> Result<Vec<GeomRecord>, Bo
     Ok(records)
 }
 
+/// Write the features to the database
 pub fn write_to_db(
     conn: &mut Connection,
     features: &Vec<FeatureAggregation>,
@@ -202,6 +228,25 @@ pub fn write_to_db(
     Ok(())
 }
 
+/// Process the shapefile and netcdf file and calculate the stats
+/// The function reads the netcdf file and extracts the data and the timeline,
+/// then reads the shapefile and extracts the geometries and the field specified by the user
+/// The function calculates the intersections between the geometries and the grid of the netcdf file
+/// and then calculates the stats for each intersection
+///
+/// # Arguments
+///
+/// * `shp_file` - Path to the shapefile
+/// * `field` - Name of the field to extract
+/// * `nc_file` - Path to the netcdf file
+/// * `variable` - Name of the variable to extract
+/// * `resolution` - Resolution in hours
+/// * `offset` - Offset in hours
+/// * `functions` - List of stats functions to apply
+///
+/// # Returns
+///
+/// A Result containing a Vec of FeatureAggregation or an error
 fn process(
     shp_file: &PathBuf,
     field: &str,
@@ -209,7 +254,7 @@ fn process(
     variable: &str,
     resolution: u32,
     offset: u32,
-    functions: Vec<StatsFunctionType>,
+    functions: &[StatsFunctionType],
 ) -> Result<Vec<FeatureAggregation>, Box<dyn std::error::Error>> {
     let start = Instant::now();
     let netcdf_data = read_netcdf(nc_file, variable)?;
@@ -265,7 +310,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let functions = args.stats;
 
     let results = process(
-        &shp_file, &field, &nc_file, &variable, resolution, offset, functions,
+        &shp_file, &field, &nc_file, &variable, resolution, offset, &functions,
     )?;
 
     let start = Instant::now();
