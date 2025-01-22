@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use std::{error::Error, marker::PhantomData};
 
-use cftime_rs::calendars::Calendar;
-
-use cftime_rs::utils::get_datetime_and_unit_from_units;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use euclid::{Box2D, Point2D};
 use geo_rasterize::Transform;
 
@@ -13,7 +10,7 @@ use geo_rasterize::BinaryBuilder;
 use ndarray::{Array1, Array3};
 
 use kolmogorov_smirnov::percentile;
-use netcdf::{AttrValue, Variable};
+
 use noisy_float::types::N32;
 use rayon::prelude::*;
 
@@ -189,67 +186,6 @@ pub struct GeomRecord {
     pub bbox: GenericBBox<Point>,
     /// The name of the feature
     pub name: String,
-}
-
-/// Extract the time variable from the NetCDF file.
-///
-/// # Arguments
-///
-/// * `time_var` - The time variable
-///
-/// # Returns
-///
-/// A `Result` containing the array of `DateTime<Utc>` values or an error.
-pub fn extract_time(time_var: &Variable) -> Result<Array1<DateTime<Utc>>, Box<dyn Error>> {
-    let time_units_attr_name: String = String::from("units");
-
-    let units_attr = time_var.attribute(&time_units_attr_name);
-    let timeline = if let Some(units_attr) = units_attr {
-        let units_attr_values = units_attr.value().or(Err("should have a value"))?;
-
-        let units = if let AttrValue::Str(units) = units_attr_values {
-            units.to_owned()
-        } else {
-            return Err("Could not find units".into());
-        };
-
-        let calendar = Calendar::Standard;
-        let (cf_datetime, unit) = get_datetime_and_unit_from_units(&units, calendar)?;
-        let duration = unit.to_duration(calendar);
-
-        time_var
-            .values::<i64>(None, None)?
-            .into_iter()
-            .filter_map(|t| (&cf_datetime + (&duration * t)).ok())
-            .map(|d| {
-                let (year, month, day, hour, minute, seconds) =
-                    d.ymd_hms().expect("should be a valid date");
-                let year: i32 = year.try_into().unwrap();
-                // create a UTC datetime
-                Utc.with_ymd_and_hms(
-                    year,
-                    month as u32,
-                    day as u32,
-                    hour as u32,
-                    minute as u32,
-                    seconds as u32,
-                )
-                .single()
-                .expect("should be a valid date")
-            })
-            .collect::<Array1<DateTime<Utc>>>()
-    } else {
-        // if the units attribute is not found, try to use the default units which are "seconds since 1970-01-01 00:00:00"
-        time_var
-            .values::<i64>(None, None)?
-            .into_iter()
-            .filter_map(|t| {
-                let adjusted_time = t; // apply the offset
-                DateTime::from_timestamp_millis(adjusted_time * 1000)
-            })
-            .collect::<Array1<DateTime<Utc>>>()
-    };
-    Ok(timeline)
 }
 
 /// Get the intersections between the geometries and the grid.
@@ -850,6 +786,94 @@ mod tests {
         assert!(!coords.contains(&(0, 2)));
         assert!(!coords.contains(&(2, 0)));
         assert!(!coords.contains(&(2, 2)));
+    }
+
+    #[test]
+    fn test_small_polygon_intersection() {
+        // 1) Create a grid that covers lat from 0..2 and lon from 0..2, step=1.
+        // => 3 rows x 3 columns
+        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 1.0, 1.0);
+
+        // 2) Create a geometry that is a small polygon centered around {x:1.5, y:1.5}
+        let polygon_coords = vec![
+            Coord { x: 1.499, y: 1.499 },
+            Coord { x: 1.501, y: 1.499 },
+            Coord { x: 1.501, y: 1.501 },
+            Coord { x: 1.499, y: 1.501 },
+            Coord { x: 1.499, y: 1.499 },
+        ];
+        let polygon = Polygon::new(LineString::from(polygon_coords), vec![]);
+
+        // For shapefile bounding box
+        let bbox = GenericBBox::<Point> {
+            min: Point::new(1.499, 1.499),
+            max: Point::new(1.501, 1.501),
+        };
+
+        let record = GeomRecord {
+            geometry: Geometry::Polygon(polygon),
+            bbox,
+            name: "TestFeature".to_string(),
+        };
+
+        // 3) Call get_intersections
+        let intersections = get_intersections(&grid, vec![record]).unwrap();
+
+        // We expect that it intersects the following pixel centers
+        // in row,col coordinates:
+        // Row=1, Col=1
+
+        let coords = intersections.get("TestFeature").unwrap();
+
+        // We espect (1,1)
+        assert!(!coords.is_empty());
+        assert!(coords.contains(&(1, 1)));
+
+        assert!(!coords.contains(&(0, 0)));
+        assert!(!coords.contains(&(0, 1)));
+        assert!(!coords.contains(&(1, 0)));
+        assert!(!coords.contains(&(0, 2)));
+        assert!(!coords.contains(&(2, 0)));
+        assert!(!coords.contains(&(2, 2)));
+    }
+
+    #[test]
+    fn test_not_intersecting() {
+        // 1) Create a grid that covers lat from 0..2 and lon from 0..2, step=1.
+        // => 3 rows x 3 columns
+        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 1.0, 1.0);
+
+        // 2) Create a geometry that does not intersect with the grid:
+        // Let's define a small polygon over lat/lon in [3.0..4.0, 3.0..4.0].
+        let polygon_coords = vec![
+            Coord { x: 3.0, y: 3.0 },
+            Coord { x: 4.0, y: 3.0 },
+            Coord { x: 4.0, y: 4.0 },
+            Coord { x: 3.0, y: 4.0 },
+            Coord { x: 3.0, y: 3.0 },
+        ];
+        let polygon = Polygon::new(LineString::from(polygon_coords), vec![]);
+
+        // For shapefile bounding box
+        let bbox = GenericBBox::<Point> {
+            min: Point::new(3.0, 3.0),
+            max: Point::new(4.0, 4.0),
+        };
+
+        let record = GeomRecord {
+            geometry: Geometry::Polygon(polygon),
+            bbox,
+            name: "TestFeature".to_string(),
+        };
+
+        // 3) Call get_intersections
+        let intersections = get_intersections(&grid, vec![record]).unwrap();
+
+        // We expect that it does not intersect with any pixel centers
+        let coords = intersections.get("TestFeature").unwrap();
+
+        // We expect an empty vector
+        assert!(coords.is_empty());
     }
 
     #[test]
