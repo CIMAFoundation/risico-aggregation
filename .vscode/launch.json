@@ -1,0 +1,70 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'risico_aggregation'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=risico_aggregation"
+                ],
+                "filter": {
+                    "name": "risico_aggregation",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'risico_aggregation'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=risico_aggregation",
+                    "--package=risico_aggregation"
+                ],
+                "filter": {
+                    "name": "risico_aggregation",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "data/comuni_ISTAT2001.shp",
+                "PRO_COM",
+                "data/VPPF.nc",
+                "VPPF",
+                "PERC75"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'risico_aggregation'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=risico_aggregation",
+                    "--package=risico_aggregation"
+                ],
+                "filter": {
+                    "name": "risico_aggregation",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

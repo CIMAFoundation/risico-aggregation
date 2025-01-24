@@ -131,7 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let start = Instant::now();
     let mut conn = Connection::open(&args.output)?;
-    write_to_db(&mut conn, &results, &table, resolution, offset)?;
+    write_to_db(&mut conn, &results, &table)?;
     conn.close().or(Err("Failed to close the connection"))?;
     println!("Writing to db took {:?}", start.elapsed());
 

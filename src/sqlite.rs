@@ -7,20 +7,16 @@ pub fn write_to_db(
     conn: &mut Connection,
     features: &Vec<FeatureAggregation>,
     table: &str,
-    hours_resolution: u32,
-    hours_offset: u32,
 ) -> Result<(), Box<dyn Error>> {
     // Build the CREATE TABLE query
     let create_table_query = format!(
         "CREATE TABLE IF NOT EXISTS {} (
-            name TEXT NOT NULL,
-            date_start TEXT NOT NULL,
-            date_end TEXT NOT NULL,
-            variable TEXT NOT NULL,
-            resolution_hours INTEGER,
-            offset_hours INTEGER,
+            fid TEXT NOT NULL,
+            date_start INTEGER NOT NULL,
+            date_end INTEGER NOT NULL,
+            stat TEXT NOT NULL,
             value REAL,
-            UNIQUE(name, date_start, date_end, variable, resolution_hours, offset_hours)
+            UNIQUE(fid, date_start, date_end, stat)
         )",
         table
     );
@@ -30,9 +26,9 @@ pub fn write_to_db(
     // Build the INSERT INTO query dynamically with ON CONFLICT clause
     let insert_query = format!(
         "INSERT INTO {}         
-        (name, date_start, date_end, variable, resolution_hours, offset_hours, value)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-        ON CONFLICT(name, date_start, date_end, variable, resolution_hours, offset_hours)
+        (fid, date_start, date_end, stat, value)
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        ON CONFLICT(fid, date_start, date_end, stat)
         DO UPDATE SET value = excluded.value",
         table
     );
@@ -49,17 +45,17 @@ pub fn write_to_db(
                 .zip(&feature.dates_end)
                 .zip(&feature.stats)
             {
-                let date_start = date_start.to_rfc3339();
-                let date_end = date_end.to_rfc3339();
+                // let date_start = date_start; //.to_rfc3339();
+                // let date_end = date_end; //.to_rfc3339();
 
                 for (var_name, var_value) in stats {
+                    let long_date_start = date_start.timestamp();
+                    let long_date_end = date_end.timestamp();
                     let params_vec: Vec<&dyn rusqlite::ToSql> = vec![
                         &feature.name,
-                        &date_start,
-                        &date_end,
+                        &long_date_start,
+                        &long_date_end,
                         var_name,
-                        &hours_resolution,
-                        &hours_offset,
                         var_value,
                     ];
                     stmt.execute(params_vec.as_slice())?;
@@ -69,6 +65,9 @@ pub fn write_to_db(
     }
     // Commit the transaction
     transaction.commit()?;
+
+    // execute vacuum to optimize the database
+    conn.execute_batch("VACUUM")?;
 
     Ok(())
 }
