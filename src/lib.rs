@@ -390,8 +390,9 @@ pub fn bucket_times(
         return vec![];
     }
 
-    // reference time is the first date in timeline, at 00:00:00 UTC
-    let reference_date = timeline[0].date_naive();
+    // reference time is based on the first time in the timeline minus the offset and resolution
+    let reference_date =
+        (timeline[0] - Duration::hours((hours_offset + hours_resolution) as i64)).date_naive();
     let reference_time = Utc
         .with_ymd_and_hms(
             reference_date.year(),
@@ -417,12 +418,16 @@ pub fn bucket_times(
             break;
         }
 
-        let indexes = timeline
+        let indexes: Vec<usize> = timeline
             .iter()
             .enumerate()
             .filter(|(_, t)| **t > start && **t <= end) // keep only times between start and end
             .map(|(i, _)| i)
             .collect();
+
+        if indexes.is_empty() {
+            continue;
+        }
 
         buckets.push(TimeBucket {
             date_start: start,
