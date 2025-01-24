@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use std::{error::Error, marker::PhantomData};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, TimeZone, Utc};
 use euclid::{Box2D, Point2D};
 use geo_rasterize::Transform;
 
@@ -18,8 +18,6 @@ use chrono::Duration;
 use shapefile::record::GenericBBox;
 use shapefile::Point;
 use strum_macros::{Display, EnumString};
-
-use std::collections::BTreeMap;
 
 pub type IntersectionMap = std::collections::HashMap<String, Vec<(usize, usize)>>;
 pub type StatFunction = Box<dyn Fn(&ndarray::Array1<N32>) -> f32>;
@@ -339,6 +337,12 @@ pub fn get_intersections(
     Ok(intersections)
 }
 
+pub struct TimeBucket {
+    pub date_start: DateTime<Utc>,
+    pub date_end: DateTime<Utc>,
+    pub time_indexes: Vec<usize>,
+}
+
 /// Bucket the times into groups based on the resolution and offset.
 ///
 /// # Arguments
@@ -366,7 +370,7 @@ pub fn get_intersections(
 ///
 /// let indices: Vec<Vec<usize>> = result
 ///    .iter()
-///   .map(|group| group.iter().map(|(i, _)| *i).collect())
+///   .map(|group| group.time_indexes.clone())
 ///  .collect();
 ///
 /// // Expect: [[0,1], [2,3], [4,5], [6,7]]
@@ -380,30 +384,55 @@ pub fn bucket_times(
     timeline: &Array1<DateTime<Utc>>,
     hours_resolution: u32,
     hours_offset: u32,
-) -> Vec<Vec<(usize, &DateTime<Utc>)>> {
+) -> Vec<TimeBucket> {
     // Safety check: make sure we have at least one time
     if timeline.is_empty() {
         return vec![];
     }
 
-    // 1. Reference time = earliest time + offset(hours)
-    let reference_time = timeline[0] + Duration::hours(hours_offset as i64);
+    // reference time is the first date in timeline, at 00:00:00 UTC
+    let reference_date = timeline[0].date_naive();
+    let reference_time = Utc
+        .with_ymd_and_hms(
+            reference_date.year(),
+            reference_date.month(),
+            reference_date.day(),
+            0,
+            0,
+            0,
+        )
+        .unwrap();
 
-    // 2. Bucket map: bucket_index -> Vec of (original_index, &DateTime)
-    let mut buckets: BTreeMap<i64, Vec<(usize, &DateTime<Utc>)>> = BTreeMap::new();
+    let last = *timeline.last().expect("should have at least one time");
 
-    for (i, t) in timeline.iter().enumerate() {
-        // 3. How many hours from reference?
-        let diff_hours = t.signed_duration_since(reference_time).num_hours();
-        // 4. Compute which bucket this belongs to (could be negative as well)
-        let bucket_idx = diff_hours.div_euclid(hours_resolution as i64);
+    let mut buckets = vec![];
+    // for loop to iterate on reference_time + offset, reference_time + offset + resolution, ...
+    for i in 0.. {
+        let start = reference_time
+            + Duration::hours(hours_offset as i64)
+            + Duration::hours(i as i64 * hours_resolution as i64);
+        let end = start + Duration::hours(hours_resolution as i64);
 
-        buckets.entry(bucket_idx).or_default().push((i, t));
+        if start >= last {
+            break;
+        }
+
+        let indexes = timeline
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| **t > start && **t <= end) // keep only times between start and end
+            .map(|(i, _)| i)
+            .collect();
+
+        buckets.push(TimeBucket {
+            date_start: start,
+            date_end: end,
+            time_indexes: indexes,
+        });
     }
-
-    // 5. Return the buckets in ascending order of bucket index
-    buckets.into_values().collect()
+    buckets
 }
+
 pub fn calculate_stats(
     data: &Array3<f32>,
     timeline: &Array1<DateTime<Utc>>,
@@ -423,10 +452,13 @@ pub fn calculate_stats(
 
         for bucket in &buckets {
             let mut bucket_stats = vec![];
-            let ix_start = bucket[0].0;
-            let ix_end = bucket[bucket.len() - 1].0;
-            let date_start = bucket[0].1;
-            let date_end = bucket[bucket.len() - 1].1;
+
+            let ix_start = *bucket.time_indexes.first().expect("has at least one time");
+            let ix_end = *bucket.time_indexes.last().expect("has at least one time");
+
+            // Get the start and end dates for the bucket
+            let date_end = bucket.date_end;
+            let date_start = bucket.date_start;
 
             // [TODO] insertion sort for speeding up processing
             let vals: Array1<N32> = (ix_start..=ix_end)
@@ -448,8 +480,8 @@ pub fn calculate_stats(
                 });
             }
             stats.push(bucket_stats);
-            dates_start.push(*date_start);
-            dates_end.push(*date_end);
+            dates_start.push(date_start);
+            dates_end.push(date_end);
         }
 
         res.push(FeatureAggregation {
@@ -700,7 +732,7 @@ mod tests {
             // We only check indices here for brevity:
             let indices: Vec<Vec<usize>> = result
                 .iter()
-                .map(|group| group.iter().map(|(i, _)| *i).collect())
+                .map(|group| group.time_indexes.clone())
                 .collect();
 
             // Expect: [[0,1], [2,3], [4,5], [6,7]]
@@ -715,7 +747,7 @@ mod tests {
             let result = bucket_times(&timeline, 3, 1);
             let indices: Vec<Vec<usize>> = result
                 .iter()
-                .map(|group| group.iter().map(|(i, _)| *i).collect())
+                .map(|group| group.time_indexes.clone())
                 .collect();
 
             // Expect: [[0], [1,2,3], [4,5,6], [7]]
