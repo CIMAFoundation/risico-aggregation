@@ -1,4 +1,4 @@
-cache.db
+*.db
 data/
 out/
 

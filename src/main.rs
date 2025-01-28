@@ -9,7 +9,7 @@ use risico_aggregation::{
 };
 use rusqlite::Connection;
 use shapefile::read_shapefile;
-use sqlite::write_to_db;
+use sqlite::{load_intersections_from_db, write_intersections_to_db, write_to_db};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -42,6 +42,9 @@ struct Args {
 
     #[clap(long, help = "Path to the output file", default_value = "cache.db")]
     output: PathBuf,
+
+    #[clap(long, help = "Path to the intersection cache file")]
+    intersection_cache: Option<PathBuf>,
 }
 
 /// Process the shapefile and netcdf file and calculate the stats
@@ -71,18 +74,52 @@ fn process(
     resolution: u32,
     offset: u32,
     functions: &[StatsFunctionType],
+    intersection_cache: Option<&PathBuf>,
 ) -> Result<Vec<FeatureAggregation>, Box<dyn std::error::Error>> {
     let start = Instant::now();
     let netcdf_data = read_netcdf(nc_file, variable)?;
     println!("Reading netcdf took {:?}", start.elapsed());
 
-    let start = Instant::now();
-    let records = read_shapefile(shp_file, field)?;
-    println!("Reading shapefile took {:?}", start.elapsed());
+    let shp_name = shp_file.file_stem().unwrap().to_str().unwrap();
 
-    let start = Instant::now();
-    let intersections = get_intersections(&netcdf_data.grid, records).unwrap();
-    println!("Calculating intersections took {:?}", start.elapsed());
+    let maybe_intersections = match intersection_cache {
+        Some(file) => {
+            let start = Instant::now();
+            let mut conn = Connection::open(file)?;
+            let maybe_intersections =
+                load_intersections_from_db(&mut conn, &netcdf_data.grid, &shp_name, field)?;
+            if maybe_intersections.is_some() {
+                println!("Reading intersections from db took {:?}", start.elapsed());
+            }
+            maybe_intersections
+        }
+        None => None,
+    };
+
+    let intersections = match maybe_intersections {
+        Some(intersections) => intersections,
+        None => {
+            let start = Instant::now();
+            let records = read_shapefile(shp_file, field)?;
+            println!("Reading shapefile took {:?}", start.elapsed());
+
+            let start = Instant::now();
+            let intersections = get_intersections(&netcdf_data.grid, records)?;
+            println!("Calculating intersections took {:?}", start.elapsed());
+
+            if intersection_cache.is_some() {
+                let mut conn = Connection::open("intersections.db")?;
+                write_intersections_to_db(
+                    &mut conn,
+                    &netcdf_data.grid,
+                    &shp_name,
+                    field,
+                    &intersections,
+                )?;
+            }
+            intersections
+        }
+    };
 
     let start = Instant::now();
     let res = calculate_stats(
@@ -109,6 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let variable = args.variable;
     let resolution = args.resolution;
     let offset = args.offset;
+    let intersection_cache = args.intersection_cache;
 
     let table = match args.table {
         Some(table) => table,
@@ -126,7 +164,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let functions = args.stats;
 
     let results = process(
-        &shp_file, &field, &nc_file, &variable, resolution, offset, &functions,
+        &shp_file,
+        &field,
+        &nc_file,
+        &variable,
+        resolution,
+        offset,
+        &functions,
+        intersection_cache.as_ref(),
     )?;
 
     let start = Instant::now();
@@ -137,3 +182,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+// fn main() -> Result<(), Box<dyn std::error::Error>> {
+//     let shp = "./data/comuni_ISTAT2001.shp";
+//     let field = "PRO_COM";
+//     // let shp = "/opt/shpRisico/Italia/province_ISTAT2010.shp";
+//     // let field = "COD_PRO";
+//     // let nc = "/opt/risico/RISICOMEDSTAR/OUTPUT-NC/VPPF.nc";
+//     let nc = "./data/VPPF.nc";
+
+//     let variable = "VPPF";
+
+//     let netcdf_data = read_netcdf(&nc.into(), variable)?;
+//     let records = read_shapefile(&shp.into(), field)?;
+
+//     let shp_path = PathBuf::from(&shp);
+//     let shp_name = shp_path.file_name().unwrap().to_str().unwrap();
+
+//     let mut conn = Connection::open("intersections.db")?;
+
+//     let intersections_from_db =
+//         load_intersections_from_db(&mut conn, &netcdf_data.grid, &shp_name, &field);
+
+//     // let intersections_calculated = get_intersections(&netcdf_data.grid, records).unwrap();
+
+//     // write_intersections_to_db(
+//     //     &mut conn,
+//     //     &netcdf_data.grid,
+//     //     &shp_name,
+//     //     &field,
+//     //     &intersections_calculated,
+//     // )?;
+
+//     // // let's compare them
+//     // for (key, value) in intersections_from_db.unwrap().iter() {
+//     //     if let Some(value2) = intersections_calculated.get(key) {
+//     //         // check lenght
+//     //         if value.len() != value2.len() {
+//     //             println!("Different lenght for key: {}", key);
+//     //         } else {
+//     //             // check values
+//     //             for (i, (row, col)) in value.iter().enumerate() {
+//     //                 if value2[i] != (*row, *col) {
+//     //                     println!("Different values for key: {}", key);
+//     //                 }
+//     //             }
+//     //         }
+//     //     }
+//     // }
+//     Ok(())
+// }
