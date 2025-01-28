@@ -448,56 +448,61 @@ pub fn calculate_stats(
 ) -> Result<Vec<FeatureAggregation>, Box<dyn Error>> {
     let buckets = bucket_times(timeline, hours_resolution, hours_offset);
 
-    let mut res: Vec<FeatureAggregation> = vec![];
+    let names = intersections.keys().collect::<Vec<_>>();
+    let results: Vec<FeatureAggregation> = names
+        .par_iter()
+        .map(|name| {
+            let coords = intersections
+                .get(*name)
+                .expect("name should be in intersections");
+            let mut stats = vec![];
+            let mut dates_start = vec![];
+            let mut dates_end = vec![];
 
-    for (name, coords) in intersections {
-        let mut stats = vec![];
-        let mut dates_start = vec![];
-        let mut dates_end = vec![];
+            for bucket in &buckets {
+                let mut bucket_stats = vec![];
 
-        for bucket in &buckets {
-            let mut bucket_stats = vec![];
+                let ix_start = *bucket.time_indexes.first().expect("has at least one time");
+                let ix_end = *bucket.time_indexes.last().expect("has at least one time");
 
-            let ix_start = *bucket.time_indexes.first().expect("has at least one time");
-            let ix_end = *bucket.time_indexes.last().expect("has at least one time");
+                // Get the start and end dates for the bucket
+                let date_end = bucket.date_end;
+                let date_start = bucket.date_start;
 
-            // Get the start and end dates for the bucket
-            let date_end = bucket.date_end;
-            let date_start = bucket.date_start;
+                // [TODO] insertion sort for speeding up processing
+                let vals: Array1<N32> = (ix_start..=ix_end)
+                    .flat_map(|t_ix| coords.iter().map(move |(row, col)| (t_ix, *row, *col)))
+                    .map(|(t_ix, row, col)| data[[t_ix, row, col]])
+                    .filter(|x| *x != NODATA && !x.is_nan())
+                    .map(N32::from_f32)
+                    .collect();
 
-            // [TODO] insertion sort for speeding up processing
-            let vals: Array1<N32> = (ix_start..=ix_end)
-                .flat_map(|t_ix| coords.iter().map(move |(row, col)| (t_ix, *row, *col)))
-                .map(|(t_ix, row, col)| data[[t_ix, row, col]])
-                .filter(|x| *x != NODATA && !x.is_nan())
-                .map(N32::from_f32)
-                .collect();
-
-            if vals.is_empty() {
-                stats_functions.iter().for_each(|stat_fun_type| {
-                    bucket_stats.push((stat_fun_type.to_string(), f32::NAN));
-                });
-            } else {
-                stats_functions.iter().for_each(|&stat_fun_type| {
-                    let stat_fn = get_stat_function(stat_fun_type);
-                    let stat = stat_fn(&vals);
-                    bucket_stats.push((stat_fun_type.to_string(), stat));
-                });
+                if vals.is_empty() {
+                    stats_functions.iter().for_each(|stat_fun_type| {
+                        bucket_stats.push((stat_fun_type.to_string(), f32::NAN));
+                    });
+                } else {
+                    stats_functions.iter().for_each(|&stat_fun_type| {
+                        let stat_fn = get_stat_function(stat_fun_type);
+                        let stat = stat_fn(&vals);
+                        bucket_stats.push((stat_fun_type.to_string(), stat));
+                    });
+                }
+                stats.push(bucket_stats);
+                dates_start.push(date_start);
+                dates_end.push(date_end);
             }
-            stats.push(bucket_stats);
-            dates_start.push(date_start);
-            dates_end.push(date_end);
-        }
 
-        res.push(FeatureAggregation {
-            name: name.clone(),
-            stats,
-            dates_start,
-            dates_end,
-        });
-    }
+            FeatureAggregation {
+                name: name.to_string(),
+                stats,
+                dates_start,
+                dates_end,
+            }
+        })
+        .collect();
 
-    Ok(res)
+    Ok(results)
 }
 
 pub fn max(arr: &ndarray::Array1<N32>) -> f32 {
