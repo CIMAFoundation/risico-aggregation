@@ -146,7 +146,7 @@ pub fn write_intersections_to_db(
     let mut stmt = conn.prepare(&INSERT_GRID_QUERY)?;
     let params_vec: Vec<&dyn rusqlite::ToSql> = vec![
         &grid.min_lat,
-        &grid.max_lon,
+        &grid.max_lat,
         &grid.min_lon,
         &grid.max_lon,
         &grid.n_rows,
@@ -200,7 +200,7 @@ pub fn load_intersections_from_db(
     let mut stmt = conn.prepare(SELECT_GRID_QUERY)?;
     let params_vec: Vec<&dyn rusqlite::ToSql> = vec![
         &grid.min_lat,
-        &grid.max_lon,
+        &grid.max_lat,
         &grid.min_lon,
         &grid.max_lon,
         &grid.n_rows,
