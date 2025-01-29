@@ -3,7 +3,12 @@ use rusqlite::{Connection, OptionalExtension};
 use std::error::Error;
 
 const SELECT_GRID_QUERY: &str = "SELECT id FROM grid
-    WHERE lat_min = ?1 AND lat_max = ?2 AND lon_min = ?3 AND lon_max = ?4 AND n_rows = ?5 AND n_cols = ?6";
+    WHERE 
+    lat_min BETWEEN ?1 - 0.00001 AND ?1 + 0.00001
+    AND lat_max BETWEEN ?2 - 0.00001 AND ?2 + 0.00001
+    AND lon_min BETWEEN ?3 - 0.00001 AND ?3 + 0.00001
+    AND lon_max BETWEEN ?4 - 0.00001 AND ?4 + 0.00001
+     AND n_rows = ?5 AND n_cols = ?6";
 
 const SELECT_SHAPEFILE_AND_FIELD_QUERY: &str = "SELECT id FROM shapefile_and_field
     WHERE shapefile = ?1 AND field = ?2";
