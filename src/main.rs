@@ -62,6 +62,7 @@ struct Args {
 /// * `resolution` - Resolution in hours
 /// * `offset` - Offset in hours
 /// * `functions` - List of stats functions to apply
+/// * `intersection_cache` - Path to the intersection cache file (if any)
 ///
 /// # Returns
 ///
@@ -80,24 +81,34 @@ fn process(
     let netcdf_data = read_netcdf(nc_file, variable)?;
     println!("Reading netcdf took {:?}", start.elapsed());
 
-    let shp_name = shp_file.file_stem().unwrap().to_str().unwrap();
+    let shp_name = shp_file
+        .file_stem()
+        .ok_or_else(|| format!("Invalid shapefile path: {}", shp_file.display()))?
+        .to_str()
+        .ok_or_else(|| format!("Non-UTF8 filename: {}", shp_file.display()))?;
 
-    let maybe_intersections = match intersection_cache {
-        Some(file) => {
-            let start = Instant::now();
-            let mut conn = Connection::open(file)?;
-            let maybe_intersections =
-                load_intersections_from_db(&mut conn, &netcdf_data.grid, &shp_name, field)?;
-            if maybe_intersections.is_some() {
-                println!("Reading intersections from db took {:?}", start.elapsed());
-            }
-            maybe_intersections
+    // open the connection to the cache file
+    let mut conn = intersection_cache
+        .map(|cache_path| Connection::open(cache_path))
+        .transpose()?;
+
+    let cached_intersections = if let Some(conn) = conn.as_mut() {
+        let start = Instant::now();
+        let intersections = load_intersections_from_db(conn, &netcdf_data.grid, shp_name, field)?;
+
+        if intersections.is_some() {
+            println!("Loaded intersections from cache in {:?}", start.elapsed());
+        } else {
+            println!("No cached intersections found");
         }
-        None => None,
+
+        intersections
+    } else {
+        None
     };
 
-    let intersections = match maybe_intersections {
-        Some(intersections) => intersections,
+    let intersections = match cached_intersections {
+        Some(data) => data,
         None => {
             let start = Instant::now();
             let records = read_shapefile(shp_file, field)?;
@@ -107,15 +118,17 @@ fn process(
             let intersections = get_intersections(&netcdf_data.grid, records)?;
             println!("Calculating intersections took {:?}", start.elapsed());
 
-            if intersection_cache.is_some() {
-                let mut conn = Connection::open("intersections.db")?;
+            if let Some(conn) = conn.as_mut() {
+                let start = Instant::now();
+
                 write_intersections_to_db(
-                    &mut conn,
+                    conn,
                     &netcdf_data.grid,
                     &shp_name,
                     field,
                     &intersections,
                 )?;
+                println!("Wrote intersections to cache in {:?}", start.elapsed());
             }
             intersections
         }
@@ -182,53 +195,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-
-// fn main() -> Result<(), Box<dyn std::error::Error>> {
-//     let shp = "./data/comuni_ISTAT2001.shp";
-//     let field = "PRO_COM";
-//     // let shp = "/opt/shpRisico/Italia/province_ISTAT2010.shp";
-//     // let field = "COD_PRO";
-//     // let nc = "/opt/risico/RISICOMEDSTAR/OUTPUT-NC/VPPF.nc";
-//     let nc = "./data/VPPF.nc";
-
-//     let variable = "VPPF";
-
-//     let netcdf_data = read_netcdf(&nc.into(), variable)?;
-//     let records = read_shapefile(&shp.into(), field)?;
-
-//     let shp_path = PathBuf::from(&shp);
-//     let shp_name = shp_path.file_name().unwrap().to_str().unwrap();
-
-//     let mut conn = Connection::open("intersections.db")?;
-
-//     let intersections_from_db =
-//         load_intersections_from_db(&mut conn, &netcdf_data.grid, &shp_name, &field);
-
-//     // let intersections_calculated = get_intersections(&netcdf_data.grid, records).unwrap();
-
-//     // write_intersections_to_db(
-//     //     &mut conn,
-//     //     &netcdf_data.grid,
-//     //     &shp_name,
-//     //     &field,
-//     //     &intersections_calculated,
-//     // )?;
-
-//     // // let's compare them
-//     // for (key, value) in intersections_from_db.unwrap().iter() {
-//     //     if let Some(value2) = intersections_calculated.get(key) {
-//     //         // check lenght
-//     //         if value.len() != value2.len() {
-//     //             println!("Different lenght for key: {}", key);
-//     //         } else {
-//     //             // check values
-//     //             for (i, (row, col)) in value.iter().enumerate() {
-//     //                 if value2[i] != (*row, *col) {
-//     //                     println!("Different values for key: {}", key);
-//     //                 }
-//     //             }
-//     //         }
-//     //     }
-//     // }
-//     Ok(())
-// }

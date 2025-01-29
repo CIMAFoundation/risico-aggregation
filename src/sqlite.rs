@@ -197,6 +197,11 @@ pub fn load_intersections_from_db(
     shapefile: &str,
     field: &str,
 ) -> Result<Option<IntersectionMap>, Box<dyn Error>> {
+    // check if the tables exist
+    conn.execute_batch(&CREATE_GRID_TABLE_QUERY)?;
+    conn.execute_batch(&CREATE_INTERSECTION_TABLE_QUERY)?;
+    conn.execute_batch(&CREATE_SHAPEFILE_AND_FIELD_QUERY)?;
+
     let mut stmt = conn.prepare(SELECT_GRID_QUERY)?;
     let params_vec: Vec<&dyn rusqlite::ToSql> = vec![
         &grid.min_lat,
