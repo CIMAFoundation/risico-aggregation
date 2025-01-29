@@ -15,7 +15,8 @@ noisy_float = "0.2.0"
 netcdf = "0.10.5"
 ndarray = "0.16.1"
 rayon = "1.6.1"
-
+netcdf-sys = {version="0.8.1", features=["static"]}
+netcdf-src = "0.4.1"
 
 shapefile = { version = "0.6.0", features = ["geo-types"] }
 cftime-rs = { git = "https://github.com/CIMAFoundation/cftime-rs-no-cdylib" }
@@ -25,3 +26,5 @@ strum = { version = "0.26.3", optional = false }
 strum_macros = { version = "0.26.4", optional = false }
 clap = { version = "4.5.27", features = ["cargo", "derive"] }
 clap_derive = "4.5.24"
+
+
