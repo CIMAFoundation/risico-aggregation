@@ -47,15 +47,18 @@ pub fn read_netcdf(nc_file: &PathBuf, variable: &str) -> Result<NetcdfData, Box<
         .ok_or(format!("Missing variable {variable}"))?;
 
     let lats = lats.get::<f32, Extents>(Extents::All)?;
-    let lats = lats.into_shape((n_rows,))?;
+    let lats = lats.to_shape((n_rows,))?;
 
     let lons = lons.get::<f32, Extents>(Extents::All)?;
-    let lons = lons.into_shape((n_cols,))?;
+    let lons = lons.to_shape((n_cols,))?;
 
     let n_times = timeline.len();
 
     let data = var.get::<f32, Extents>(Extents::All)?;
-    let data = data.into_shape((n_times, n_rows, n_cols))?;
+    
+    let data = data.to_shape((n_times, n_rows, n_cols))?;
+    let data = data.to_owned();
+
 
     let max_lat = lats[n_rows - 1] as f64;
     let min_lon = lons[0] as f64;
