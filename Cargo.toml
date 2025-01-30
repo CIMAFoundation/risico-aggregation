@@ -21,7 +21,7 @@ netcdf-src = "0.4.1"
 shapefile = { version = "0.6.0", features = ["geo-types"] }
 cftime-rs = { git = "https://github.com/CIMAFoundation/cftime-rs-no-cdylib" }
 kolmogorov_smirnov = "1.1.0"
-rusqlite = { version = "0.33.0", features = ["chrono"] }
+rusqlite = { version = "0.33.0", features = ["chrono", "bundled"] }
 strum = { version = "0.26.3", optional = false }
 strum_macros = { version = "0.26.4", optional = false }
 clap = { version = "4.5.27", features = ["cargo", "derive"] }
