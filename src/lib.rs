@@ -140,11 +140,11 @@ impl Grid {
         max_lat: f64,
         min_lon: f64,
         max_lon: f64,
-        lat_step: f64,
-        lon_step: f64,
+        n_rows: usize,
+        n_cols: usize,
     ) -> Self {
-        let n_rows = f64::round((max_lat - min_lat) / lat_step) as usize + 1;
-        let n_cols = f64::round((max_lon - min_lon) / lon_step) as usize + 1;
+        let lat_step = (max_lat - min_lat) / (n_rows - 1) as f64;
+        let lon_step = (max_lon - min_lon) / (n_cols - 1) as f64;
         Self {
             min_lat,
             max_lat,
@@ -207,7 +207,7 @@ pub struct GeomRecord {
 ///
 /// // 1) Create a grid that covers lat from 0..2 and lon from 0..2, step=1.
 /// // => 3 rows x 3 columns
-/// let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 1.0, 1.0);
+/// let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 3, 3);
 ///
 /// // 2) Create a geometry that covers roughly the top-left corner of the grid:
 /// // Let's define a small polygon over lat/lon in [0.0..1.5, 0.0..1.5].
@@ -271,10 +271,13 @@ pub fn get_intersections(
 
     let name_and_coords = records
         .par_iter()
-        .map(|record| {
+        .filter_map(|record| {
             let bbox = &record.bbox;
             let geometry = &record.geometry;
             let name = &record.name;
+            // if name != "56001" {
+            //     return None;
+            // }
 
             let p1 = Point2D {
                 x: bbox.min.x,
@@ -288,8 +291,8 @@ pub fn get_intersections(
             };
             let bbox = Box2D::new(p1, p2);
 
-            // get boundin box in raster coordinates
-            let bbox = geo_to_pix.outer_transformed_box(&bbox);
+            // get bounding box in raster coordinates
+            let bbox_pixel_space = geo_to_pix.outer_transformed_box(&bbox);
 
             let n_cols = grid.n_cols;
             let n_rows = grid.n_rows;
@@ -305,13 +308,13 @@ pub fn get_intersections(
                 .expect("Could not rasterize geometry");
             let pixels = builder.finish();
 
-            let min_col = f64::floor(bbox.min.x) as usize;
-            let max_col = f64::ceil(bbox.max.x);
-            let min_row = f64::floor(bbox.min.y) as usize;
-            let max_row = f64::ceil(bbox.max.y);
+            let min_col = f64::floor(bbox_pixel_space.min.x) as usize;
+            let max_col = f64::ceil(bbox_pixel_space.max.x);
+            let min_row = f64::floor(bbox_pixel_space.min.y) as usize;
+            let max_row = f64::ceil(bbox_pixel_space.max.y);
 
             if max_col < 0.0 || max_row < 0.0 || min_col > (n_cols - 1) || min_row > (n_rows + 1) {
-                return (name, vec![]);
+                return Some((name, vec![]));
             }
 
             let min_col = usize::clamp(min_col, 0, n_cols - 1);
@@ -324,7 +327,7 @@ pub fn get_intersections(
                 .filter(|(row, col)| pixels[[*row, *col]])
                 .collect::<Vec<_>>();
 
-            (name, coords)
+            Some((name, coords))
         })
         .collect::<Vec<_>>();
 
@@ -772,7 +775,7 @@ mod tests {
     fn test_get_intersections() {
         // 1) Create a grid that covers lat from 0..2 and lon from 0..2, step=1.
         // => 3 rows x 3 columns
-        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 1.0, 1.0);
+        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 3, 3);
 
         // 2) Create a geometry that covers roughly the top-left corner of the grid:
         // Let's define a small polygon over lat/lon in [0.0..1.5, 0.0..1.5].
@@ -834,7 +837,7 @@ mod tests {
     fn test_small_polygon_intersection() {
         // 1) Create a grid that covers lat from 0..2 and lon from 0..2, step=1.
         // => 3 rows x 3 columns
-        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 1.0, 1.0);
+        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 3, 3);
 
         // 2) Create a geometry that is a small polygon centered around {x:1.5, y:1.5}
         let polygon_coords = vec![
@@ -883,7 +886,7 @@ mod tests {
     fn test_not_intersecting() {
         // 1) Create a grid that covers lat from 0..2 and lon from 0..2, step=1.
         // => 3 rows x 3 columns
-        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 1.0, 1.0);
+        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 3, 3);
 
         // 2) Create a geometry that does not intersect with the grid:
         // Let's define a small polygon over lat/lon in [3.0..4.0, 3.0..4.0].
@@ -924,7 +927,7 @@ mod tests {
         let timeline = create_test_timeline();
 
         // Create a simple Grid: lat=0..2, lon=0..2, step=1 => 3 rows, 3 cols
-        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 1.0, 1.0);
+        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 3, 3);
 
         // We create a single polygon that covers row=0..1, col=0..1 in pixel space.
         let polygon_coords = vec![

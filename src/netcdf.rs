@@ -55,19 +55,16 @@ pub fn read_netcdf(nc_file: &PathBuf, variable: &str) -> Result<NetcdfData, Box<
     let n_times = timeline.len();
 
     let data = var.get::<f32, Extents>(Extents::All)?;
-    
+
     let data = data.to_shape((n_times, n_rows, n_cols))?;
     let data = data.to_owned();
-
 
     let max_lat = lats[n_rows - 1] as f64;
     let min_lon = lons[0] as f64;
     let min_lat = lats[0] as f64;
     let max_lon = lons[n_cols - 1] as f64;
-    let lat_step = (lats[1] - lats[0]) as f64;
-    let lon_step = (lons[1] - lons[0]) as f64;
 
-    let grid = Grid::new(min_lat, max_lat, min_lon, max_lon, lat_step, lon_step);
+    let grid = Grid::new(min_lat, max_lat, min_lon, max_lon, n_rows, n_cols);
 
     Ok(NetcdfData {
         data,

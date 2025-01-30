@@ -39,11 +39,13 @@
                 }
             },
             "args": [
-                "data/comuni_ISTAT2001.shp",
-                "PRO_COM",
-                "data/VPPF.nc",
+                "/opt/risico/AGGREGATION_CACHE/shp/lazio/comuni.shp",
+                "id_risico",
+                "/share/archivio/experience/data/MeteoModels/RISICOLAZIO/2025/01/30/0000/VPPF.nc",
                 "VPPF",
-                "PERC75"
+                "PERC75",
+                "--intersection-cache",
+                "./intersections.db"
             ],
             "cwd": "${workspaceFolder}"
         },
