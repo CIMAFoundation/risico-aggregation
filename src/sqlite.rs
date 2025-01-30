@@ -142,56 +142,74 @@ pub fn write_intersections_to_db(
     field: &str,
     intersections: &IntersectionMap,
 ) -> Result<(), Box<dyn Error>> {
-    // Open a connection to the database
-    conn.execute_batch(&CREATE_GRID_TABLE_QUERY)?;
-    conn.execute_batch(&CREATE_INTERSECTION_TABLE_QUERY)?;
-    conn.execute_batch(&CREATE_SHAPEFILE_AND_FIELD_QUERY)?;
+    let transaction = conn.transaction()?;
+    {
+        // Open a connection to the database
+        transaction.execute_batch(CREATE_GRID_TABLE_QUERY)?;
+        transaction.execute_batch(CREATE_INTERSECTION_TABLE_QUERY)?;
+        transaction.execute_batch(CREATE_SHAPEFILE_AND_FIELD_QUERY)?;
 
-    // insert grid if not already present
-    let mut stmt = conn.prepare(&INSERT_GRID_QUERY)?;
-    let params_vec: Vec<&dyn rusqlite::ToSql> = vec![
-        &grid.min_lat,
-        &grid.max_lat,
-        &grid.min_lon,
-        &grid.max_lon,
-        &grid.n_rows,
-        &grid.n_cols,
-    ];
-
-    stmt.execute(params_vec.as_slice())?;
-    // retrieve grid id
-
-    let mut stmt = conn.prepare(SELECT_GRID_QUERY)?;
-    let grid_id: u64 = stmt.query_row(params_vec.as_slice(), |row| row.get::<usize, _>(0))?; // get the first column
-
-    // insert shapefile and field if not already present
-    let mut stmt = conn.prepare(&INSERT_SHAPEFILE_AND_FIELD_QUERY)?;
-    let params_vec: Vec<&dyn rusqlite::ToSql> = vec![&shapefile, &field];
-
-    stmt.execute(params_vec.as_slice())?;
-    // retrieve shapefile and field id
-    let mut stmt = conn.prepare(SELECT_SHAPEFILE_AND_FIELD_QUERY)?;
-    let shapefile_and_field_id: u64 =
-        stmt.query_row(params_vec.as_slice(), |row| row.get::<usize, _>(0))?; // get the first column
-
-    // insert intersections
-    let mut stmt = conn.prepare(&INSERT_INTERSECTION_QUERY)?;
-    for (feature_id, rows_cols) in intersections {
-        // let rows_cols_blob = bincode::serialize(rows_cols)?;
-        let rows_cols_text = rows_cols
-            .iter()
-            .map(|(row, col)| format!("{},{}", row, col))
-            .collect::<Vec<String>>()
-            .join(";");
-
+        // insert grid if not already present
+        let mut stmt = transaction.prepare(INSERT_GRID_QUERY)?;
         let params_vec: Vec<&dyn rusqlite::ToSql> = vec![
-            &grid_id,
-            &shapefile_and_field_id,
-            feature_id,
-            &rows_cols_text,
+            &grid.min_lat,
+            &grid.max_lat,
+            &grid.min_lon,
+            &grid.max_lon,
+            &grid.n_rows,
+            &grid.n_cols,
         ];
+
+        stmt.execute(params_vec.as_slice())?;
+        // retrieve grid id
+
+        // insert shapefile and field if not already present
+        let mut stmt = transaction.prepare(INSERT_SHAPEFILE_AND_FIELD_QUERY)?;
+        let params_vec: Vec<&dyn rusqlite::ToSql> = vec![&shapefile, &field];
+
         stmt.execute(params_vec.as_slice())?;
     }
+    transaction.commit()?;
+    let transaction = conn.transaction()?;
+    {
+        let mut stmt = transaction.prepare(SELECT_GRID_QUERY)?;
+        let params_vec: Vec<&dyn rusqlite::ToSql> = vec![
+            &grid.min_lat,
+            &grid.max_lat,
+            &grid.min_lon,
+            &grid.max_lon,
+            &grid.n_rows,
+            &grid.n_cols,
+        ];
+
+        let grid_id: u64 = stmt.query_row(params_vec.as_slice(), |row| row.get::<usize, _>(0))?; // get the first column
+
+        // retrieve shapefile and field id
+        let mut stmt = transaction.prepare(SELECT_SHAPEFILE_AND_FIELD_QUERY)?;
+        let params_vec: Vec<&dyn rusqlite::ToSql> = vec![&shapefile, &field];
+        let shapefile_and_field_id: u64 =
+            stmt.query_row(params_vec.as_slice(), |row| row.get::<usize, _>(0))?; // get the first column
+
+        let mut stmt = transaction.prepare(INSERT_INTERSECTION_QUERY)?;
+        // insert intersections
+        for (feature_id, rows_cols) in intersections {
+            // let rows_cols_blob = bincode::serialize(rows_cols)?;
+            let rows_cols_text = rows_cols
+                .iter()
+                .map(|(row, col)| format!("{},{}", row, col))
+                .collect::<Vec<String>>()
+                .join(";");
+
+            let params_vec: Vec<&dyn rusqlite::ToSql> = vec![
+                &grid_id,
+                &shapefile_and_field_id,
+                feature_id,
+                &rows_cols_text,
+            ];
+            stmt.execute(params_vec.as_slice())?;
+        }
+    }
+    transaction.commit()?;
 
     Ok(())
 }
@@ -203,9 +221,9 @@ pub fn load_intersections_from_db(
     field: &str,
 ) -> Result<Option<IntersectionMap>, Box<dyn Error>> {
     // check if the tables exist
-    conn.execute_batch(&CREATE_GRID_TABLE_QUERY)?;
-    conn.execute_batch(&CREATE_INTERSECTION_TABLE_QUERY)?;
-    conn.execute_batch(&CREATE_SHAPEFILE_AND_FIELD_QUERY)?;
+    conn.execute_batch(CREATE_GRID_TABLE_QUERY)?;
+    conn.execute_batch(CREATE_INTERSECTION_TABLE_QUERY)?;
+    conn.execute_batch(CREATE_SHAPEFILE_AND_FIELD_QUERY)?;
 
     let mut stmt = conn.prepare(SELECT_GRID_QUERY)?;
     let params_vec: Vec<&dyn rusqlite::ToSql> = vec![
@@ -243,14 +261,14 @@ pub fn load_intersections_from_db(
         let rows_cols: Vec<(usize, usize)> = rows_cols_text
             .split(";")
             .filter_map(|s| {
-                if s.len() == 0 {
+                if s.is_empty() {
                     return None;
                 }
                 let split: Vec<&str> = s.split(",").collect();
                 Some(split)
             })
             .filter_map(|split| {
-                if split.len() == 0 {
+                if split.is_empty() {
                     return None;
                 }
                 let row: usize = split[0].parse().unwrap();

@@ -89,7 +89,7 @@ fn process(
 
     // open the connection to the cache file
     let mut conn = intersection_cache
-        .map(|cache_path| Connection::open(cache_path))
+        .map(Connection::open)
         .transpose()?;
 
     let cached_intersections = if let Some(conn) = conn.as_mut() {
@@ -124,7 +124,7 @@ fn process(
                 write_intersections_to_db(
                     conn,
                     &netcdf_data.grid,
-                    &shp_name,
+                    shp_name,
                     field,
                     &intersections,
                 )?;
