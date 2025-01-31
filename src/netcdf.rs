@@ -1,4 +1,4 @@
-use std::{error::Error, path::PathBuf};
+use std::{error::Error, path::Path};
 
 use cftime_rs::{calendars::Calendar, utils::get_datetime_and_unit_from_units};
 use chrono::{DateTime, TimeZone, Utc};
@@ -24,7 +24,7 @@ pub struct NetcdfData {
 /// # Returns
 ///
 /// A Result containing a NetcdfData struct or an error
-pub fn read_netcdf(nc_file: &PathBuf, variable: &str) -> Result<NetcdfData, Box<dyn Error>> {
+pub fn read_netcdf(nc_file: &Path, variable: &str) -> Result<NetcdfData, Box<dyn Error>> {
     let nc_file = netcdf::open(nc_file)?;
 
     let lats = &nc_file
