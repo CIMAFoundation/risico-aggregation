@@ -448,7 +448,7 @@ pub fn calculate_stats(
     hours_resolution: u32,
     hours_offset: u32,
     stats_functions: &[StatsFunctionType],
-) -> Result<Vec<FeatureAggregation>, Box<dyn Error>> {
+) -> Vec<FeatureAggregation> {
     let buckets = bucket_times(timeline, hours_resolution, hours_offset);
 
     let names = intersections.keys().collect::<Vec<_>>();
@@ -505,7 +505,7 @@ pub fn calculate_stats(
         })
         .collect();
 
-    Ok(results)
+    results
 }
 
 pub fn max(arr: &ndarray::Array1<N32>) -> f32 {
@@ -968,8 +968,7 @@ mod tests {
             hours_resolution,
             hours_offset,
             &stats_functions,
-        )
-        .unwrap();
+        );
 
         // We have just 1 feature => "TestFeature"
         assert_eq!(feature_aggregations.len(), 1);

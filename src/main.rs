@@ -2,17 +2,17 @@ mod config;
 mod netcdf;
 mod shapefile;
 mod sqlite;
-mod sqlite_stats;
 use clap::Parser;
 
-use netcdf::{read_netcdf, NetcdfData};
-use risico_aggregation::{
-    calculate_stats, get_intersections, FeatureAggregation, IntersectionMap, StatsFunctionType,
-};
+use netcdf::read_netcdf;
+use risico_aggregation::{calculate_stats, get_intersections, StatsFunctionType};
 use rusqlite::Connection;
 use shapefile::read_shapefile;
-use sqlite::{load_intersections_from_db, write_intersections_to_db};
-use std::path::{Path, PathBuf};
+use sqlite::{
+    insert_results, insert_shapefile_and_fids, insert_variable, load_intersections_from_db,
+    write_intersections_to_db,
+};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Instant;
 
@@ -22,70 +22,34 @@ struct Args {
     #[clap(long, help = "Configuration yaml file")]
     config: Option<PathBuf>,
 
+    #[clap(long, help = "Path to the output cache file")]
+    output: Option<PathBuf>,
+
     #[clap(long, help = "Path to the intersection cache file")]
     intersection_cache: Option<PathBuf>,
 }
 
-/// Process the shapefile and netcdf file and calculate the stats
-/// The function reads the netcdf file and extracts the data and the timeline,
-/// then reads the shapefile and extracts the geometries and the field specified by the user
-/// The function calculates the intersections between the geometries and the grid of the netcdf file
-/// and then calculates the stats for each intersection
-///
-/// # Arguments
-///
-/// * `shp_file` - Path to the shapefile
-/// * `field` - Name of the field to extract
-/// * `nc_file` - Path to the netcdf file
-/// * `variable` - Name of the variable to extract
-/// * `resolution` - Resolution in hours
-/// * `offset` - Offset in hours
-/// * `functions` - List of stats functions to apply
-/// * `intersection_cache` - Path to the intersection cache file (if any)
-///
-/// # Returns
-///
-/// A Result containing a Vec of FeatureAggregation or an error
-fn process(
-    netcdf_data: &NetcdfData,
-    resolution: u32,
-    offset: u32,
-    functions: &[StatsFunctionType],
-    intersections: &IntersectionMap,
-) -> Result<Vec<FeatureAggregation>, Box<dyn std::error::Error>> {
-    let start = Instant::now();
-    let res = calculate_stats(
-        &netcdf_data.data,
-        &netcdf_data.timeline,
-        &intersections,
-        resolution,
-        offset,
-        functions,
-    )?;
-
-    println!("Calculating stats took {:?}", start.elapsed());
-
-    Ok(res)
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let intersection_cache = args.intersection_cache;
-
     let config_file = args
         .config
         .unwrap_or_else(|| PathBuf::from("aggregation_config.yaml"))
         .canonicalize()?;
 
-    let config = config::load_config(&config_file)?;
-    let output_path = config.output_path;
+    let intersection_db_file = args
+        .intersection_cache
+        .unwrap_or(PathBuf::from("file::memory"));
+    let output_db_file = args.output.unwrap_or_else(|| PathBuf::from("output.db"));
 
-    let intersection_db_file = intersection_cache.unwrap_or(PathBuf::from("file::memory"));
-    let mut intersection_db_connection = Connection::open(&intersection_db_file)?;
+    let config = config::load_config(&config_file)?;
+    let output_path = PathBuf::from(config.output_path);
+
+    let mut intersection_db_conn = Connection::open(&intersection_db_file)?;
+    let mut output_db_conn = Connection::open(&output_db_file)?;
 
     for variable in config.variables {
-        let variable_path =
-            PathBuf::from(format!("{}/{}.nc", &output_path, variable.variable).as_str());
+        let variable_file = format!("{}.nc", variable.variable);
+        let variable_path = output_path.join(variable_file);
         // load the netcdf
         let netcdf_data = read_netcdf(&variable_path, &variable.variable)?;
 
@@ -98,6 +62,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|s| StatsFunctionType::from_str(s.as_str()).unwrap())
                 .collect::<Vec<_>>();
 
+            let variable_id = insert_variable(
+                &mut output_db_conn,
+                &variable.variable,
+                resolution as f64,
+                offset as f64,
+            )?;
+
             for shape in aggregation.shapefiles {
                 let shp_file = PathBuf::from(shape.shapefile);
                 let field = shape.id_field;
@@ -109,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok_or_else(|| format!("Non-UTF8 filename: {}", shp_file.display()))?;
 
                 let intersections = match load_intersections_from_db(
-                    &mut intersection_db_connection,
+                    &mut intersection_db_conn,
                     &netcdf_data.grid,
                     shp_name,
                     &field,
@@ -125,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Calculating intersections took {:?}", start.elapsed());
 
                         write_intersections_to_db(
-                            &mut intersection_db_connection,
+                            &mut intersection_db_conn,
                             &netcdf_data.grid,
                             shp_name,
                             &field,
@@ -134,13 +105,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         intersections
                     }
                 };
-                let results = process(
-                    &netcdf_data,
+                let results = calculate_stats(
+                    &netcdf_data.data,
+                    &netcdf_data.timeline,
+                    &intersections,
                     resolution,
                     offset,
-                    functions.as_slice(),
-                    &intersections,
+                    &functions,
                 );
+
+                let fids = intersections
+                    .iter()
+                    .map(|i| i.0.as_str())
+                    .collect::<Vec<_>>();
+
+                let shapefile_id =
+                    insert_shapefile_and_fids(&mut output_db_conn, shp_name, &field, &fids)?;
+
+                insert_results(&mut output_db_conn, variable_id, shapefile_id, &results)?;
             }
         }
     }

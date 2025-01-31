@@ -73,6 +73,8 @@ variables:
         offset: 0
         stats: [PERC90, PERC75, PERC50, MEAN, MAX]
         shapefiles: *shapefiles
+
+output_path: /opt/risico/RISICO2023/OUTPUT-NC
 "#;
 
     #[test]
