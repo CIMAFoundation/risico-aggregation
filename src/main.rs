@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use shapefile::read_shapefile;
 use sqlite::{
     insert_results, insert_shapefile_and_fids, insert_variable, load_intersections_from_db,
-    write_intersections_to_db,
+    write_intersections_to_db, initialize_db, insert_stat
 };
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -22,8 +22,8 @@ struct Args {
     #[clap(long, help = "Configuration yaml file")]
     config: Option<PathBuf>,
 
-    #[clap(long, help = "Path to the output cache file")]
-    output: Option<PathBuf>,
+    // #[clap(long, help = "Path to the output cache file")]
+    // output: Option<PathBuf>,
 
     #[clap(long, help = "Path to the intersection cache file")]
     intersection_cache: Option<PathBuf>,
@@ -39,19 +39,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let intersection_db_file = args
         .intersection_cache
         .unwrap_or(PathBuf::from("file::memory"));
-    let output_db_file = args.output.unwrap_or_else(|| PathBuf::from("output.db"));
+    
 
-    let config = config::load_config(&config_file)?;
-    let output_path = PathBuf::from(config.output_path);
-
+    let config = config::load_config(&config_file)?;    
     let mut intersection_db_conn = Connection::open(&intersection_db_file)?;
-    let mut output_db_conn = Connection::open(&output_db_file)?;
+    let output_path = PathBuf::from(config.output_path);
+    
 
     for variable in config.variables {
         let variable_file = format!("{}.nc", variable.variable);
+        println!("Processing file: {}", &variable_file);
         let variable_path = output_path.join(variable_file);
         // load the netcdf
         let netcdf_data = read_netcdf(&variable_path, &variable.variable)?;
+
+        let cache_file = format!("{}.db", variable.variable);
+        let cache_path = PathBuf::from(&cache_file);
+        // let output_db_file = args.output.unwrap_or_else(|| PathBuf::from("output.db"));
+        let mut output_db_conn = Connection::open(&cache_path)?;
+        initialize_db(&mut output_db_conn)?;
+
+        
 
         for aggregation in variable.aggregations {
             let resolution = aggregation.resolution;
@@ -61,15 +69,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .map(|s| StatsFunctionType::from_str(s.as_str()).unwrap())
                 .collect::<Vec<_>>();
+            let the_variable = variable.variable.clone();
 
             let variable_id = insert_variable(
                 &mut output_db_conn,
-                &variable.variable,
+                &the_variable,
                 resolution as f64,
                 offset as f64,
             )?;
 
             for shape in aggregation.shapefiles {
+                
                 let shp_file = PathBuf::from(shape.shapefile);
                 let field = shape.id_field;
 
@@ -79,6 +89,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .to_str()
                     .ok_or_else(|| format!("Non-UTF8 filename: {}", shp_file.display()))?;
 
+                println!("Processing shapefile: {} with resolution {} and offset {}", &shp_name, &resolution, &offset);
+
+               
                 let intersections = match load_intersections_from_db(
                     &mut intersection_db_conn,
                     &netcdf_data.grid,
@@ -121,6 +134,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let shapefile_id =
                     insert_shapefile_and_fids(&mut output_db_conn, shp_name, &field, &fids)?;
+                
+                aggregation.stats.iter().for_each(|stat| {insert_stat(&mut output_db_conn, stat).expect("should insert stat");});
 
                 insert_results(&mut output_db_conn, variable_id, shapefile_id, &results)?;
             }

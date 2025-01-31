@@ -252,7 +252,7 @@ pub fn initialize_db(conn: &mut Connection) -> Result<()> {
             variable INTEGER NOT NULL,
             date INTEGER NOT NULL,
             stat INTEGER NOT NULL,
-            value REAL NOT NULL,
+            value REAL,
             FOREIGN KEY(fid) REFERENCES fids(id) ON DELETE CASCADE,
             FOREIGN KEY(variable) REFERENCES variables(id) ON DELETE CASCADE,
             FOREIGN KEY(stat) REFERENCES stats(id) ON DELETE CASCADE,
@@ -353,7 +353,8 @@ pub fn insert_value(
     )?;
 
     transaction.execute(
-        "INSERT INTO results (fid, variable, date, stat, value) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO results (fid, variable, date, stat, value) VALUES (?1, ?2, ?3, ?4, ?5)
+        ON CONFLICT(fid, variable, date, stat) DO UPDATE SET value = excluded.value",
         params![fid_id, variable_id, date, stat_id, value],
     )?;
 
