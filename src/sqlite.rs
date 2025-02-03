@@ -1,5 +1,5 @@
-use risico_aggregation::{FeatureAggregation, Grid, IntersectionMap};
-use rusqlite::{params, Connection, OptionalExtension, Result, Transaction};
+use risico_aggregation::{AggregationResults, Grid, IntersectionMap};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 use std::error::Error;
 
 const SELECT_GRID_QUERY: &str = "SELECT id FROM grid
@@ -221,181 +221,97 @@ pub fn initialize_db(conn: &mut Connection) -> Result<()> {
         PRAGMA synchronous = NORMAL;
         PRAGMA cache_size = -2000;
 
-        CREATE TABLE IF NOT EXISTS shapefiles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            fid_field TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS fids (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            shapefile_id INTEGER NOT NULL,
-            fid TEXT NOT NULL,
-            UNIQUE(shapefile_id, fid),
-            FOREIGN KEY(shapefile_id) REFERENCES shapefiles(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS variables (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            variable TEXT NOT NULL UNIQUE,
-            resolution REAL NOT NULL,
-            offset REAL NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS stats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            stat TEXT NOT NULL UNIQUE
-        );
-
         CREATE TABLE IF NOT EXISTS results (
-            fid INTEGER NOT NULL,
-            variable INTEGER NOT NULL,
-            date INTEGER NOT NULL,
-            stat INTEGER NOT NULL,
-            value REAL,
-            FOREIGN KEY(fid) REFERENCES fids(id) ON DELETE CASCADE,
-            FOREIGN KEY(variable) REFERENCES variables(id) ON DELETE CASCADE,
-            FOREIGN KEY(stat) REFERENCES stats(id) ON DELETE CASCADE,
-            UNIQUE(fid, variable, date, stat)
+            shapefile TEXT NOT NULL,
+            field TEXT NOT NULL,
+            variable TEXT NOT NULL,
+            resolution INTEGER NOT NULL,
+            offset INTEGER NOT NULL,
+            results BLOB NOT NULL,
+            UNIQUE(shapefile, field, variable, resolution, offset)
         );
         ",
     )?;
     Ok(())
 }
 
-/// Insert a new shapefile and associated fids within a transaction
-pub fn insert_shapefile_and_fids(
-    conn: &mut Connection,
-    name: &str,
-    fid_field: &str,
-    fields: &[&str],
-) -> Result<u64> {
-    let transaction = conn.transaction()?;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use std::io::{Read, Write};
 
-    // Insert shapefile if it does not exist
-    transaction.execute(
-        "INSERT OR IGNORE INTO shapefiles (name, fid_field) VALUES (?1, ?2)",
-        params![name, fid_field],
-    )?;
-
-    // Retrieve the shapefile ID
-    let shapefile_id: u64 = transaction.query_row(
-        "SELECT id FROM shapefiles WHERE name = ?1",
-        params![name],
-        |row| row.get(0),
-    )?;
-
-    // Insert fids if they do not exist
-    for field in fields {
-        transaction.execute(
-            "INSERT OR IGNORE INTO fids (shapefile_id, fid) VALUES (?1, ?2)",
-            params![shapefile_id, field],
-        )?;
-    }
-
-    transaction.commit()?;
-    Ok(shapefile_id)
+/// Compress a JSON string using Gzip
+fn compress_json(json_str: &str) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(json_str.as_bytes())
+        .expect("Compression failed");
+    encoder.finish().expect("Failed to finish compression")
 }
 
-/// Insert a new variable entry
-pub fn insert_variable(
-    conn: &mut Connection,
-    variable: &str,
-    resolution: f64,
-    offset: f64,
-) -> Result<u64> {
-    conn.execute(
-        "INSERT OR IGNORE INTO variables (variable, resolution, offset) VALUES (?1, ?2, ?3)",
-        params![variable, resolution, offset],
-    )?;
-    let variable_id: u64 = conn.query_row(
-        "SELECT id FROM variables WHERE variable = ?1",
-        params![variable],
-        |row| row.get(0),
-    )?;
-    Ok(variable_id)
+/// Decompress a Gzip compressed JSON string
+#[allow(dead_code)]
+fn decompress_json(blob: &[u8]) -> String {
+    let mut decoder = GzDecoder::new(blob);
+    let mut decompressed = String::new();
+    decoder
+        .read_to_string(&mut decompressed)
+        .expect("Decompression failed");
+    decompressed
 }
 
-/// Insert a new stat entry
-pub fn insert_stat(conn: &mut Connection, stat: &str) -> Result<u64> {
-    conn.execute(
-        "INSERT OR IGNORE INTO stats (stat) VALUES (?1)",
-        params![stat],
-    )?;
-    let stat_id: u64 = conn.query_row(
-        "SELECT id FROM stats WHERE stat = ?1",
-        params![stat],
-        |row| row.get(0),
-    )?;
-    Ok(stat_id)
-}
-
-/// Insert a new value entry
-pub fn insert_value(
-    transaction: &mut Transaction,
-    shapefile_id: u64,
-    fid: &str,
-    variable_id: u64,
-    date: i64,
-    stat: &str,
-    value: f32,
-) -> Result<()> {
-    let fid_id: u64 = transaction.query_row(
-        "SELECT id FROM fids WHERE shapefile_id = ?1 AND fid = ?2",
-        params![shapefile_id, fid],
-        |row| row.get(0),
-    )?;
-
-    let stat_id: u64 = transaction.query_row(
-        "SELECT id FROM stats WHERE stat = ?1",
-        params![stat],
-        |row| row.get(0),
-    )?;
-
-    transaction.execute(
-        "INSERT INTO results (fid, variable, date, stat, value) VALUES (?1, ?2, ?3, ?4, ?5)
-        ON CONFLICT(fid, variable, date, stat) DO UPDATE SET value = excluded.value",
-        params![fid_id, variable_id, date, stat_id, value],
-    )?;
-
-    Ok(())
-}
-
+/// Insert the results of the aggregation into the database
+/// # Arguments
+/// * `conn` - A mutable reference to the SQLite connection
+/// * `variable` - The variable name
+/// * `shapefile` - The shapefile name
+/// * `field` - The fid field name
+/// * `resolution` - The time resolution of the aggregation in hours
+/// * `offset` - The time offset of the aggregation in hours
+/// * `results` - The aggregation results
+///
+/// # Returs
+/// * A Result containing the number of rows affected or an error
+///
 pub fn insert_results(
     conn: &mut Connection,
-    variable_id: u64,
-    shapefile_id: u64,
-    feats: &[FeatureAggregation],
+    variable: &str,
+    shapefile: &str,
+    field: &str,
+    resolution: u32,
+    offset: u32,
+    results: &AggregationResults,
 ) -> Result<()> {
-    let mut transaction = conn.transaction()?;
+    // Serialize the results to JSON
 
-    for feat in feats {
-        let fid = &feat.name;
-        let stats = &feat.stats;
-        let dates = &feat.dates_start;
-        stats.into_iter().zip(dates).for_each(|(entry, date)| {
-            for (stat, value) in entry {
-                insert_value(
-                    &mut transaction,
-                    shapefile_id,
-                    fid,
-                    variable_id,
-                    date.timestamp(),
-                    stat,
-                    *value,
-                )
-                .expect("should insert value");
-            }
-        });
-    }
+    let json_data = serde_json::to_string(results).expect("Serialization failed");
+    let compressed_blob = compress_json(&json_data);
 
-    transaction.commit()?;
+    conn.execute(
+        "INSERT INTO results (shapefile, field, variable, resolution, offset, results)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        ON CONFLICT(shapefile, field, variable, resolution, offset)
+        DO UPDATE SET results = excluded.results",
+        params![
+            shapefile,
+            field,
+            variable,
+            resolution,
+            offset,
+            compressed_blob
+        ],
+    )?;
 
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use chrono::DateTime;
+    use risico_aggregation::{AggregationResultForDate, FeatureResults};
+
     use super::*;
 
     fn setup_db() -> Connection {
@@ -407,78 +323,52 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_shapefile_and_fids() {
-        let mut conn = setup_db();
-        let shapefile_id =
-            insert_shapefile_and_fids(&mut conn, "test_shapefile", "fid_field", &["fid1", "fid2"])
-                .unwrap();
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM fids WHERE shapefile_id = ?1",
-                params![shapefile_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 2);
+    fn test_initialize_db() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        match initialize_db(&mut conn) {
+            Ok(_) => (),
+            Err(e) => panic!("Failed to initialize database: {}", e),
+        }
     }
 
     #[test]
-    fn test_insert_variable() {
+    fn test_insert_results() {
         let mut conn = setup_db();
-        let var_id = insert_variable(&mut conn, "temperature", 0.1, 5.0).unwrap();
+        let variable = "test_variable";
+        let shapefile = "test_shapefile";
+        let field = "test_field";
+        let resolution = 1;
+        let offset = 0;
+        let results = AggregationResults {
+            results: vec![AggregationResultForDate {
+                date_start: DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z")
+                    .unwrap()
+                    .timestamp() as u32,
+                date_end: DateTime::parse_from_rfc3339("2023-01-02T00:00:00Z")
+                    .unwrap()
+                    .timestamp() as u32,
+                feats: vec![FeatureResults {
+                    name: String::from("feature"),
+                    stats: HashMap::from([("PERC90".into(), 1.0)]),
+                }],
+            }],
+        };
 
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM variables WHERE id = ?1",
-                params![var_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
-    }
+        // this should serialize to
+        let json_result = "{\"results\":[{\"feats\":[{\"name\":\"feature\",\"stats\":{\"PERC90\":1.0}}],\"date_start\":1672531200,\"date_end\":1672617600}]}";
 
-    #[test]
-    fn test_insert_stat() {
-        let mut conn = setup_db();
-        let stat_id = insert_stat(&mut conn, "mean").unwrap();
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM stats WHERE id = ?1",
-                params![stat_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn test_insert_value() {
-        let mut conn = setup_db();
-
-        let shapefile_id =
-            insert_shapefile_and_fids(&mut conn, "test_shapefile", "fid_field", &["fid1"]).unwrap();
-
-        let var_id = insert_variable(&mut conn, "temperature", 0.1, 5.0).unwrap();
-        let _stat_id = insert_stat(&mut conn, "mean").unwrap();
-
-        let mut transaction = conn.transaction().unwrap();
-        insert_value(
-            &mut transaction,
-            shapefile_id,
-            &"fid1",
-            var_id,
-            1700000000,
-            &"mean",
-            25.5,
-        )
-        .unwrap();
-        transaction.commit().unwrap();
-
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM results", params![], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 1);
+        match insert_results(
+            &mut conn, variable, shapefile, field, resolution, offset, &results,
+        ) {
+            Ok(_) => {
+                let mut stmt = conn.prepare("SELECT results FROM results").unwrap();
+                let mut rows = stmt.query([]).unwrap();
+                let row = rows.next().unwrap().unwrap();
+                let blob: Vec<u8> = row.get(0).unwrap();
+                let decompressed = decompress_json(&blob);
+                assert_eq!(decompressed, json_result);
+            }
+            Err(e) => panic!("Failed to insert results: {}", e),
+        }
     }
 }

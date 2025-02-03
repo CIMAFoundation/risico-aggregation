@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use std::hash::Hash;
 use std::{error::Error, marker::PhantomData};
 
 use chrono::{DateTime, Datelike, TimeZone, Utc};
@@ -15,6 +16,7 @@ use noisy_float::types::N32;
 use rayon::prelude::*;
 
 use chrono::Duration;
+use serde::{Deserialize, Serialize};
 use shapefile::record::GenericBBox;
 use shapefile::Point;
 use strum_macros::{Display, EnumString};
@@ -66,13 +68,13 @@ pub enum StatsFunctionType {
 /// use risico_aggregation::StatsFunctionType;
 /// use noisy_float::types::N32;
 ///
-/// let stat_fn = get_stat_function(StatsFunctionType::MIN);
+/// let stat_fn = get_stat_function(&StatsFunctionType::MIN);
 ///
 /// let data: ndarray::Array1<N32> = ndarray::Array1::from_vec(vec![1.0, 2.0, 3.0]).mapv(N32::from_f32);
 /// let min_val = stat_fn(&data);
 /// assert_eq!(min_val, 1.0);
 /// ```
-pub fn get_stat_function(stat: StatsFunctionType) -> StatFunction {
+pub fn get_stat_function(stat: &StatsFunctionType) -> StatFunction {
     match stat {
         StatsFunctionType::MIN => Box::new(min),
         StatsFunctionType::MAX => Box::new(max),
@@ -91,16 +93,32 @@ pub fn get_stat_function(stat: StatsFunctionType) -> StatFunction {
 }
 
 /// A struct to hold the aggregated statistics for a feature.
-#[derive(Debug)]
-pub struct FeatureAggregation {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FeatureResults {
     /// The name of the feature
     pub name: String,
-    /// The statistics for each time step and variable
-    pub stats: Vec<Vec<(String, f32)>>,
-    /// The start date for each time step
-    pub dates_start: Vec<DateTime<Utc>>,
-    /// The end date for each time step
-    pub dates_end: Vec<DateTime<Utc>>,
+
+    /// The statistics for each variable
+    pub stats: HashMap<String, f32>,
+}
+
+/// A struct to hold the aggregated statistics for all features.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AggregationResultForDate {
+    /// aggregation results for each time step
+    pub feats: Vec<FeatureResults>,
+
+    /// The start date for each time step (UTC seconds from epoch)
+    pub date_start: u32,
+
+    /// The end date for each time step (UTC seconds from epoch)
+    pub date_end: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+/// A type defining the aggregation results.
+pub struct AggregationResults {
+    pub results: Vec<AggregationResultForDate>,
 }
 
 /// A struct to hold the grid information.
@@ -448,64 +466,54 @@ pub fn calculate_stats(
     hours_resolution: u32,
     hours_offset: u32,
     stats_functions: &[StatsFunctionType],
-) -> Vec<FeatureAggregation> {
+) -> AggregationResults {
     let buckets = bucket_times(timeline, hours_resolution, hours_offset);
-
     let names = intersections.keys().collect::<Vec<_>>();
-    let results: Vec<FeatureAggregation> = names
-        .par_iter()
-        .map(|name| {
-            let coords = intersections
-                .get(*name)
-                .expect("name should be in intersections");
-            let mut stats = vec![];
-            let mut dates_start = vec![];
-            let mut dates_end = vec![];
+    let results = buckets
+        .iter()
+        .map(|bucket| {
+            let ix_start = *bucket.time_indexes.first().expect("has at least one time");
+            let ix_end = *bucket.time_indexes.last().expect("has at least one time");
 
-            for bucket in &buckets {
-                let mut bucket_stats = vec![];
+            let feats = names
+                .par_iter()
+                .map(|name| {
+                    let coords = intersections
+                        .get(*name)
+                        .expect("name should be in intersections");
+                    let mut stats = HashMap::new();
 
-                let ix_start = *bucket.time_indexes.first().expect("has at least one time");
-                let ix_end = *bucket.time_indexes.last().expect("has at least one time");
+                    // [TODO] insertion sort for speeding up processing
+                    let vals: Array1<N32> = (ix_start..=ix_end)
+                        .flat_map(|t_ix| coords.iter().map(move |(row, col)| (t_ix, *row, *col)))
+                        .map(|(t_ix, row, col)| data[[t_ix, row, col]])
+                        .filter(|x| *x != NODATA && !x.is_nan())
+                        .map(N32::from_f32)
+                        .collect();
 
-                // Get the start and end dates for the bucket
-                let date_end = bucket.date_end;
-                let date_start = bucket.date_start;
-
-                // [TODO] insertion sort for speeding up processing
-                let vals: Array1<N32> = (ix_start..=ix_end)
-                    .flat_map(|t_ix| coords.iter().map(move |(row, col)| (t_ix, *row, *col)))
-                    .map(|(t_ix, row, col)| data[[t_ix, row, col]])
-                    .filter(|x| *x != NODATA && !x.is_nan())
-                    .map(N32::from_f32)
-                    .collect();
-
-                if vals.is_empty() {
                     stats_functions.iter().for_each(|stat_fun_type| {
-                        bucket_stats.push((stat_fun_type.to_string(), f32::NAN));
-                    });
-                } else {
-                    stats_functions.iter().for_each(|&stat_fun_type| {
+                        let stat_name = stat_fun_type.to_string();
                         let stat_fn = get_stat_function(stat_fun_type);
                         let stat = stat_fn(&vals);
-                        bucket_stats.push((stat_fun_type.to_string(), stat));
+                        stats.insert(stat_name.to_string(), stat);
                     });
-                }
-                stats.push(bucket_stats);
-                dates_start.push(date_start);
-                dates_end.push(date_end);
-            }
 
-            FeatureAggregation {
-                name: name.to_string(),
-                stats,
-                dates_start,
-                dates_end,
+                    FeatureResults {
+                        name: name.to_string(),
+                        stats,
+                    }
+                })
+                .collect();
+            let date_start = bucket.date_start.timestamp() as u32;
+            let date_end = bucket.date_end.timestamp() as u32;
+            AggregationResultForDate {
+                feats,
+                date_start,
+                date_end,
             }
         })
         .collect();
-
-    results
+    AggregationResults { results }
 }
 
 pub fn max(arr: &ndarray::Array1<N32>) -> f32 {
@@ -604,7 +612,6 @@ mod tests {
     use geo_types::{Coord, Geometry, LineString, Polygon};
     use ndarray::array;
     use shapefile::{record::GenericBBox, Point};
-    use std::collections::HashMap;
 
     // Helper function to create a small 3D data array.
     // Dimensions: (time, row, col) = (T, R, C)
@@ -961,7 +968,7 @@ mod tests {
         let hours_resolution = 1;
         let hours_offset = 0;
 
-        let feature_aggregations = calculate_stats(
+        let aggr_results = calculate_stats(
             &data_3d,
             &timeline,
             &intersections,
@@ -971,37 +978,30 @@ mod tests {
         );
 
         // We have just 1 feature => "TestFeature"
-        assert_eq!(feature_aggregations.len(), 1);
-        let agg = &feature_aggregations[0];
-        assert_eq!(agg.name, "TestFeature");
+        assert_eq!(aggr_results.results[0].feats.len(), 1);
+        let agg_0 = &aggr_results.results[0].feats[0];
+        assert_eq!(agg_0.name, "TestFeature");
 
         // Because resolution=1, we expect the same number of "stats" entries as time steps = 2
-        assert_eq!(agg.stats.len(), 2);
+        assert_eq!(aggr_results.results.len(), 2);
 
         // For time step 0, row=0..1,col=0..1 => data at:
         //  data[[0,0,0]] = 1.0, data[[0,0,1]] = 2.0, data[[0,1,0]] = 4.0, data[[0,1,1]] = 5.0
         //
         // => min=1, max=5, mean= (1+2+4+5)/4=3.0
-        let stats_bucket_0 = &agg.stats[0];
+        let map_0 = &agg_0.stats;
         // It's a Vec<(String, f32)>, in order: [("min", 1.0), ("max", 5.0), ("mean", 3.0)]
-        let mut map_0 = HashMap::new();
-        for (key, val) in stats_bucket_0 {
-            map_0.insert(key.clone(), *val);
-        }
         assert_eq!(map_0["MIN"], 1.0);
         assert_eq!(map_0["MAX"], 5.0);
         assert!((map_0["MEAN"] - 3.0).abs() < 1e-6);
 
+        let agg_1 = &aggr_results.results[1].feats[0];
         // For time step 1, row=0..1,col=0..1 => data at:
         //  data[[1,0,0]] = 10.0, data[[1,0,1]] = 20.0,
         //  data[[1,1,0]] = 40.0, data[[1,1,1]] = 50.0
         //
         // => min=10, max=50, mean=(10+20+40+50)/4 = 30.0
-        let stats_bucket_1 = &agg.stats[1];
-        let mut map_1 = HashMap::new();
-        for (key, val) in stats_bucket_1 {
-            map_1.insert(key.clone(), *val);
-        }
+        let map_1 = &agg_1.stats;
         assert_eq!(map_1["MIN"], 10.0);
         assert_eq!(map_1["MAX"], 50.0);
         assert!((map_1["MEAN"] - 30.0).abs() < 1e-6);
