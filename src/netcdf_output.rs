@@ -27,8 +27,8 @@ impl From<&String> for NcString {
 
 /// Open a netCDF file for update if it exists, or create a new one.
 pub fn open_netcdf(path: &Path) -> Result<FileMut> {
-        // Create a new netCDF file.
-        netcdf::create(path)
+    // Create a new netCDF file.
+    netcdf::create(path)
 }
 
 pub fn get_group_name(shp_name: &str, fid: &str, resolution: u32, offset: u32) -> String {
@@ -53,8 +53,8 @@ pub fn write_results_to_file(
     }?;
 
     // Create dimensions (netCDF variables must be associated with dimensions)
-    let dim_rows = group.add_dimension("rows", rows)?;
-    let dim_cols = group.add_dimension("cols", cols)?;
+    group.add_dimension("rows", rows)?;
+    group.add_dimension("cols", cols)?;
 
     // Write the "dates" variable (here assumed to be numeric).
     let mut dates_var = group.add_variable::<u64>("dates", &["rows"])?;

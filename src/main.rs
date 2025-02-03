@@ -54,8 +54,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut out_file = open_netcdf(&cache_path)?;
 
         for aggregation in variable.aggregations {
-            let the_variable = variable.variable.clone();
-
             let resolution = aggregation.resolution;
             let offset = aggregation.offset;
             let functions = aggregation
