@@ -1,6 +1,7 @@
 use risico_aggregation::{AggregationResults, Grid, IntersectionMap};
 use rusqlite::{params, Connection, OptionalExtension, Result};
 use std::error::Error;
+use zstd::zstd_safe::CompressionLevel;
 
 const SELECT_GRID_QUERY: &str = "SELECT id FROM grid
     WHERE 
@@ -235,14 +236,13 @@ pub fn initialize_db(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
-use flate2::Compression;
 use std::io::{Read, Write};
+use zstd::{Decoder, Encoder};
 
 /// Compress a JSON string using Gzip
 fn compress_json(json_str: &str) -> Vec<u8> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    let mut encoder =
+        Encoder::new(Vec::new(), CompressionLevel::default()).expect("Failed to create encoder");
     encoder
         .write_all(json_str.as_bytes())
         .expect("Compression failed");
@@ -250,9 +250,8 @@ fn compress_json(json_str: &str) -> Vec<u8> {
 }
 
 /// Decompress a Gzip compressed JSON string
-#[allow(dead_code)]
 fn decompress_json(blob: &[u8]) -> String {
-    let mut decoder = GzDecoder::new(blob);
+    let mut decoder = Decoder::new(blob).expect("Failed to create decoder");
     let mut decompressed = String::new();
     decoder
         .read_to_string(&mut decompressed)
@@ -303,6 +302,24 @@ pub fn insert_results(
     )?;
 
     Ok(())
+}
+
+/// Load the results of the aggregation from the database
+pub fn load_results_as_json(
+    conn: &Connection,
+    variable: &str,
+    shapefile: &str,
+    field: &str,
+    resolution: u32,
+    offset: u32,
+) -> Result<String, Box<dyn Error>> {
+    let mut stmt = conn.prepare("SELECT results FROM results WHERE shapefile = ?1 AND field = ?2 AND variable = ?3 AND resolution = ?4 AND offset = ?5")?;
+    let params_vec: Vec<&dyn rusqlite::ToSql> =
+        vec![&shapefile, &field, &variable, &resolution, &offset];
+    let blob: Vec<u8> = stmt.query_row(params_vec.as_slice(), |row| row.get(0))?;
+    let decompressed = decompress_json(&blob);
+
+    Ok(decompressed)
 }
 
 #[cfg(test)]
