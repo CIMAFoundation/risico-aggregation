@@ -236,13 +236,14 @@ pub fn initialize_db(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use std::io::{Read, Write};
-use zstd::{Decoder, Encoder};
 
 /// Compress a JSON string using Gzip
 fn compress_json(json_str: &str) -> Vec<u8> {
-    let mut encoder =
-        Encoder::new(Vec::new(), CompressionLevel::default()).expect("Failed to create encoder");
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder
         .write_all(json_str.as_bytes())
         .expect("Compression failed");
@@ -250,15 +251,15 @@ fn compress_json(json_str: &str) -> Vec<u8> {
 }
 
 /// Decompress a Gzip compressed JSON string
+#[allow(dead_code)]
 fn decompress_json(blob: &[u8]) -> String {
-    let mut decoder = Decoder::new(blob).expect("Failed to create decoder");
+    let mut decoder = GzDecoder::new(blob);
     let mut decompressed = String::new();
     decoder
         .read_to_string(&mut decompressed)
         .expect("Decompression failed");
     decompressed
 }
-
 /// Insert the results of the aggregation into the database
 /// # Arguments
 /// * `conn` - A mutable reference to the SQLite connection
