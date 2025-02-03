@@ -1,5 +1,6 @@
 mod config;
 mod netcdf;
+mod netcdf_output;
 mod shapefile;
 mod sqlite;
 use clap::Parser;
@@ -8,9 +9,7 @@ use netcdf::read_netcdf;
 use risico_aggregation::{calculate_stats, get_intersections, StatsFunctionType};
 use rusqlite::Connection;
 use shapefile::read_shapefile;
-use sqlite::{
-    initialize_db, insert_results, load_intersections_from_db, write_intersections_to_db,
-};
+use sqlite::{load_intersections_from_db, write_intersections_to_db};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Instant;
@@ -49,13 +48,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // load the netcdf
         let netcdf_data = read_netcdf(&variable_path, &variable.variable)?;
 
-        let cache_file = format!("{}.db", variable.variable);
+        let cache_file = format!("{}.h5", variable.variable);
         let cache_path = PathBuf::from(&cache_file);
         // let output_db_file = args.output.unwrap_or_else(|| PathBuf::from("output.db"));
-        let mut output_db_conn = Connection::open(&cache_path)?;
-        initialize_db(&mut output_db_conn)?;
 
         for aggregation in variable.aggregations {
+            let the_variable = variable.variable.clone();
+
             let resolution = aggregation.resolution;
             let offset = aggregation.offset;
             let functions = aggregation
@@ -63,7 +62,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .map(|s| StatsFunctionType::from_str(s.as_str()).unwrap())
                 .collect::<Vec<_>>();
-            let the_variable = variable.variable.clone();
 
             for shape in aggregation.shapefiles {
                 let shp_file = PathBuf::from(shape.shapefile);
@@ -74,6 +72,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok_or_else(|| format!("Invalid shapefile path: {}", shp_file.display()))?
                     .to_str()
                     .ok_or_else(|| format!("Non-UTF8 filename: {}", shp_file.display()))?;
+
+                // let mut group = create_or_get_group(&mut file, shp_name)?;
 
                 println!(
                     "Processing shapefile: {} with resolution {} and offset {}",
@@ -115,15 +115,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &functions,
                 );
 
-                insert_results(
-                    &mut output_db_conn,
-                    &the_variable,
-                    shp_name,
-                    &field,
-                    resolution,
-                    offset,
-                    &results,
-                )?;
+                // insert_results(
+                //     &mut output_db_conn,
+                //     &the_variable,
+                //     shp_name,
+                //     &field,
+                //     resolution,
+                //     offset,
+                //     &results,
+                // )?;
             }
         }
     }

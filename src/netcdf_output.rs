@@ -1,0 +1,96 @@
+use netcdf::types::{NcTypeDescriptor, NcVariableType};
+use netcdf::{self, Extents, FileMut, Result};
+use risico_aggregation::AggregationResults;
+use std::ffi::CString;
+use std::path::Path;
+
+#[repr(transparent)]
+/// `NC_STRING` compatible struct, no drop implementation, use with caution
+pub struct NcString(pub *mut std::ffi::c_char);
+unsafe impl NcTypeDescriptor for NcString {
+    fn type_descriptor() -> NcVariableType {
+        NcVariableType::String
+    }
+}
+
+impl From<&String> for NcString {
+    fn from(s: &String) -> Self {
+        // Create a CString; this will ensure the string is NUL-terminated.
+        let cstring = CString::new(s.clone()).expect("CString::new failed");
+        // Convert the CString into a raw pointer.
+        // This transfers ownership; note that without a proper drop implementation,
+        // you'll need to eventually reclaim the memory (using CString::from_raw) if applicable.
+
+        Self(cstring.into_raw())
+    }
+}
+
+/// Open a netCDF file for update if it exists, or create a new one.
+fn open_netcdf(path: &Path) -> Result<FileMut> {
+    if path.exists() {
+        // Open an existing file in write (update) mode.
+        netcdf::append(path)
+    } else {
+        // Create a new netCDF file.
+        netcdf::create(path)
+    }
+}
+
+pub fn get_group_name(shp_name: &str, fid: &str, resolution: u64, offset: u64) -> String {
+    format!("{}_{}_{}_{}", shp_name, fid, resolution, offset)
+}
+
+/// Write the results to a group in the netCDF file.
+/// This example creates two dimensions ("rows" and "cols"), then writes
+/// a variable for the dates, one for the features, and finally one variable per result matrix.
+pub fn write_results_to_file(
+    file: &mut FileMut,
+    group_name: &str,
+    results: AggregationResults,
+) -> Result<()> {
+    let rows = results.times.len();
+    let cols = results.feats.len();
+
+    let mut group = if let Some(existing) = file.group_mut(group_name)? {
+        Ok(existing)
+    } else {
+        file.add_group(group_name)
+    }?;
+
+    // Create dimensions (netCDF variables must be associated with dimensions)
+    let dim_rows = group.add_dimension("rows", rows)?;
+    let dim_cols = group.add_dimension("cols", cols)?;
+
+    // Write the "dates" variable (here assumed to be numeric).
+    let mut dates_var = group.add_variable::<u64>("dates", &["rows"])?;
+    dates_var
+        .add_attribute("units", "seconds since 1970-01-01 00:00:00.0")
+        .unwrap_or_else(|_| panic!("Add time units failed"));
+
+    let times = results
+        .times
+        .iter()
+        .map(|t| t.timestamp() as u64)
+        .collect::<Vec<_>>();
+    dates_var.put_values(&times, Extents::All)?;
+
+    // Write the "features" variable.
+    // Write the "features" variable.
+    let mut feats_var = group.add_variable::<NcString>("features", &["cols"])?;
+
+    // Convert each feature to a String
+    let feats: Vec<NcString> = results.feats.iter().map(|s| s.into()).collect();
+
+    // Put the values into the variable
+    feats_var.put_values(&feats, Extents::All)?;
+
+    // println!("Data written to netCDF file successfully.");
+
+    // // For each (statistic, matrix) pair, create a variable with dimensions [rows, cols].
+    for (stat, matrix) in results.results {
+        let mut var = group.add_variable::<f64>(&stat, &["rows", "cols"])?;
+        var.put_values(matrix.as_slice().unwrap(), Extents::All)?;
+    }
+
+    Ok(())
+}
