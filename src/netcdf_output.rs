@@ -26,7 +26,7 @@ impl From<&String> for NcString {
 }
 
 /// Open a netCDF file for update if it exists, or create a new one.
-fn open_netcdf(path: &Path) -> Result<FileMut> {
+pub fn open_netcdf(path: &Path) -> Result<FileMut> {
     if path.exists() {
         // Open an existing file in write (update) mode.
         netcdf::append(path)
@@ -36,7 +36,7 @@ fn open_netcdf(path: &Path) -> Result<FileMut> {
     }
 }
 
-pub fn get_group_name(shp_name: &str, fid: &str, resolution: u64, offset: u64) -> String {
+pub fn get_group_name(shp_name: &str, fid: &str, resolution: u32, offset: u32) -> String {
     format!("{}_{}_{}_{}", shp_name, fid, resolution, offset)
 }
 
@@ -64,7 +64,7 @@ pub fn write_results_to_file(
     // Write the "dates" variable (here assumed to be numeric).
     let mut dates_var = group.add_variable::<u64>("dates", &["rows"])?;
     dates_var
-        .add_attribute("units", "seconds since 1970-01-01 00:00:00.0")
+        .put_attribute("units", "seconds since 1970-01-01 00:00:00.0")
         .unwrap_or_else(|_| panic!("Add time units failed"));
 
     let times = results

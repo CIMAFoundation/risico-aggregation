@@ -6,6 +6,7 @@ mod sqlite;
 use clap::Parser;
 
 use netcdf::read_netcdf;
+use netcdf_output::{get_group_name, open_netcdf, write_results_to_file};
 use risico_aggregation::{calculate_stats, get_intersections, StatsFunctionType};
 use rusqlite::Connection;
 use shapefile::read_shapefile;
@@ -48,9 +49,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // load the netcdf
         let netcdf_data = read_netcdf(&variable_path, &variable.variable)?;
 
-        let cache_file = format!("{}.h5", variable.variable);
+        let cache_file = format!("{}.nc", variable.variable);
         let cache_path = PathBuf::from(&cache_file);
-        // let output_db_file = args.output.unwrap_or_else(|| PathBuf::from("output.db"));
+        let mut out_file = open_netcdf(&cache_path)?;
 
         for aggregation in variable.aggregations {
             let the_variable = variable.variable.clone();
@@ -114,6 +115,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     offset,
                     &functions,
                 );
+
+                let group_name = get_group_name(shp_name, &field, resolution, offset);
+
+                write_results_to_file(&mut out_file, &group_name, results)?;
 
                 // insert_results(
                 //     &mut output_db_conn,

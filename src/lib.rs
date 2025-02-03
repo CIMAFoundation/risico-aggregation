@@ -949,7 +949,7 @@ mod tests {
             super::StatsFunctionType::MEAN,
             super::StatsFunctionType::MAX,
         ];
-bacon
+
         // Bucket times with resolution=1 => each time step is its own bucket
         let hours_resolution = 1;
         let hours_offset = 0;
