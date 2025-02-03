@@ -1,4 +1,5 @@
 *.db
+*.nc
 data/
 out/
 

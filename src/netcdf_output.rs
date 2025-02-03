@@ -27,13 +27,8 @@ impl From<&String> for NcString {
 
 /// Open a netCDF file for update if it exists, or create a new one.
 pub fn open_netcdf(path: &Path) -> Result<FileMut> {
-    if path.exists() {
-        // Open an existing file in write (update) mode.
-        netcdf::append(path)
-    } else {
         // Create a new netCDF file.
         netcdf::create(path)
-    }
 }
 
 pub fn get_group_name(shp_name: &str, fid: &str, resolution: u32, offset: u32) -> String {
