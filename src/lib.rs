@@ -96,7 +96,7 @@ pub fn get_stat_function(stat: &StatsFunctionType) -> StatFunction {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FeatureResults {
     /// The name of the feature
-    pub name: String,
+    pub fid: String,
 
     /// The statistics for each variable
     pub stats: HashMap<String, f32>,
@@ -477,9 +477,9 @@ pub fn calculate_stats(
 
             let feats = names
                 .par_iter()
-                .map(|name| {
+                .map(|fid| {
                     let coords = intersections
-                        .get(*name)
+                        .get(*fid)
                         .expect("name should be in intersections");
                     let mut stats = HashMap::new();
 
@@ -498,8 +498,9 @@ pub fn calculate_stats(
                         stats.insert(stat_name.to_string(), stat);
                     });
 
+                    let fid = fid.to_string();
                     FeatureResults {
-                        name: name.to_string(),
+                        fid,
                         stats,
                     }
                 })

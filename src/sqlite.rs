@@ -1,7 +1,6 @@
 use risico_aggregation::{AggregationResults, Grid, IntersectionMap};
 use rusqlite::{params, Connection, OptionalExtension, Result};
 use std::error::Error;
-use zstd::zstd_safe::CompressionLevel;
 
 const SELECT_GRID_QUERY: &str = "SELECT id FROM grid
     WHERE 
@@ -243,7 +242,7 @@ use std::io::{Read, Write};
 
 /// Compress a JSON string using Gzip
 fn compress_json(json_str: &str) -> Vec<u8> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
     encoder
         .write_all(json_str.as_bytes())
         .expect("Compression failed");

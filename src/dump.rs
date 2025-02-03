@@ -39,12 +39,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shapefile = args.shapefile.unwrap();
     let field = args.field.unwrap();
 
-    let start = Instant::now();
     let conn = Connection::open(&db_file)?;
     let results = load_results_as_json(&conn, &variable, &shapefile, &field, resolution, offset)?;
-    let duration = start.elapsed();
-    println!("Loaded results in {:?}", duration);
 
-    println!("{:?}", results);
+    println!("{}", results);
     Ok(())
 }
