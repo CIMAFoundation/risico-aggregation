@@ -84,6 +84,8 @@ pub fn write_results_to_file(
     // // For each (statistic, matrix) pair, create a variable with dimensions [rows, cols].
     for (stat, matrix) in results.results {
         let mut var = group.add_variable::<f64>(&stat, &["rows", "cols"])?;
+        var.set_compression(9, true)
+            .expect("Can set compression level");
         var.put_values(matrix.as_slice().unwrap(), Extents::All)?;
     }
 
