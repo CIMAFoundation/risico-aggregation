@@ -1,4 +1,4 @@
-# Aggregation Experiment
+# RISICO Aggregation
 
 This repository contains a Rust application for processing shapefiles and NetCDF files to calculate statistical aggregations. The application reads a shapefile and a NetCDF file, calculates intersections between the geometries in the shapefile and the grid in the NetCDF file, and then computes specified statistical functions on the intersected data.
 
