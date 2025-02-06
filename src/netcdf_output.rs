@@ -36,8 +36,6 @@ pub fn get_group_name(shp_name: &str, fid: &str, resolution: u32, offset: u32) -
 }
 
 /// Write the results to a group in the netCDF file.
-/// This example creates two dimensions ("rows" and "cols"), then writes
-/// a variable for the dates, one for the features, and finally one variable per result matrix.
 pub fn write_results_to_file(
     file: &mut FileMut,
     group_name: &str,
@@ -53,11 +51,11 @@ pub fn write_results_to_file(
     }?;
 
     // Create dimensions (netCDF variables must be associated with dimensions)
-    group.add_dimension("rows", rows)?;
-    group.add_dimension("cols", cols)?;
+    group.add_dimension("date", rows)?;
+    group.add_dimension("feature", cols)?;
 
     // Write the "dates" variable (here assumed to be numeric).
-    let mut dates_var = group.add_variable::<u64>("dates", &["rows"])?;
+    let mut dates_var = group.add_variable::<u64>("date", &["date"])?;
     dates_var
         .put_attribute("units", "seconds since 1970-01-01 00:00:00.0")
         .unwrap_or_else(|_| panic!("Add time units failed"));
@@ -71,7 +69,7 @@ pub fn write_results_to_file(
 
     // Write the "features" variable.
     // Write the "features" variable.
-    let mut feats_var = group.add_variable::<NcString>("features", &["cols"])?;
+    let mut feats_var = group.add_variable::<NcString>("feature", &["feature"])?;
 
     // Convert each feature to a String
     let feats: Vec<NcString> = results.feats.iter().map(|s| s.into()).collect();
@@ -83,7 +81,7 @@ pub fn write_results_to_file(
 
     // // For each (statistic, matrix) pair, create a variable with dimensions [rows, cols].
     for (stat, matrix) in results.results {
-        let mut var = group.add_variable::<f64>(&stat, &["rows", "cols"])?;
+        let mut var = group.add_variable::<f64>(&stat, &["date", "feature"])?;
         var.set_compression(9, true)
             .expect("Can set compression level");
         var.put_values(matrix.as_slice().unwrap(), Extents::All)?;

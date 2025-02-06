@@ -21,10 +21,11 @@ struct Args {
     #[clap(long, help = "Configuration yaml file")]
     config: Option<PathBuf>,
 
-    // #[clap(long, help = "Path to the output cache file")]
-    // output: Option<PathBuf>,
     #[clap(long, help = "Path to the intersection cache file")]
     intersection_cache: Option<PathBuf>,
+
+    #[clap(long, help = "Output path")]
+    output: PathBuf,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,19 +39,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .intersection_cache
         .unwrap_or(PathBuf::from("file::memory"));
 
+    let output_path = args.output.canonicalize()?;
+
     let config = config::load_config(&config_file)?;
     let mut intersection_db_conn = Connection::open(&intersection_db_file)?;
-    let output_path = PathBuf::from(config.output_path);
+    let input_path = PathBuf::from(&config.output_path);
 
     for variable in config.variables {
         let variable_file = format!("{}.nc", variable.variable);
         println!("Processing file: {}", &variable_file);
-        let variable_path = output_path.join(variable_file);
+        let variable_path = input_path.join(variable_file);
         // load the netcdf
         let netcdf_data = read_netcdf(&variable_path, &variable.variable)?;
 
         let cache_file = format!("{}.nc", variable.variable);
-        let cache_path = PathBuf::from(&cache_file);
+        let cache_path = output_path.join(cache_file);
         let mut out_file = open_netcdf(&cache_path)?;
 
         for aggregation in variable.aggregations {
