@@ -1,3 +1,6 @@
+// #[cfg(feature = "python")]
+mod python;
+
 use std::collections::HashMap;
 
 use std::hash::Hash;
@@ -129,8 +132,8 @@ impl Grid {
     /// * `max_lat` - The maximum latitude
     /// * `min_lon` - The minimum longitude
     /// * `max_lon` - The maximum longitude
-    /// * `lat_step` - The latitude step
-    /// * `lon_step` - The longitude step
+    /// * `n_rows` - Number of rows
+    /// * `n_cols` - Number of columns
     pub fn new(
         min_lat: f64,
         max_lat: f64,
