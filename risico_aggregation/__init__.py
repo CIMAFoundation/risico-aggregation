@@ -11,7 +11,7 @@ from shapely.geometry.base import BaseGeometry
 from datetime import datetime
 from pytz import UTC
 # Import the compiled Rust module.
-import py_risico_aggregation
+import risico_aggregation.py_risico_aggregation as py_risico_aggregation
 
 def compute_intersections(
     gdf: gpd.GeoDataFrame,
