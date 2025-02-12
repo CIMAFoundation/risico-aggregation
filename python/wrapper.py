@@ -38,6 +38,7 @@ def compute_intersections(
     intersections : risico_aggregation.PyIntersectionMap
         A dictionary mapping feature ids (as strings) to lists of (row, col) intersection tuples.
     """
+
     # Get overall bounds from Latitudes and Longitudes
     minx, maxx = lons.min(), lons.max()
     miny, maxy = lats.min(), lats.max()
@@ -134,7 +135,7 @@ def aggregate_stats(
     # 
 
     df_out = {}
-    times = [datetime.fromtimestamp(t, tz=UTC) for t in agg_results.times]
+    times = [datetime.fromtimestamp(t*1000, tz=UTC) for t in agg_results.times]
     feats = agg_results.feats
     for stat, values in agg_results.results.items():
         df = pd.DataFrame(
