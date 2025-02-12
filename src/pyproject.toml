@@ -1,9 +1,0 @@
-[build-system]
-requires = ["maturin>=0.12"]
-build-backend = "maturin"
-
-[project]
-name = "risico_aggregation"
-version = "0.1.0"
-description = "A Python wrapper for my Rust algorithm"
-#authors = "Mirko D'Andrea"
