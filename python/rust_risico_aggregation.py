@@ -11,13 +11,13 @@ from shapely.geometry.base import BaseGeometry
 from datetime import datetime
 from pytz import UTC
 # Import the compiled Rust module.
-import risico_aggregation.py_risico_aggregation as py_risico_aggregation
+from rust_risico_aggregation.rust_risico_aggregation import PyIntersectionMap, PyGrid, PyGeomRecord, py_get_intersections, py_calculate_stats
 
 def compute_intersections(
     gdf: gpd.GeoDataFrame,
     lats: xr.DataArray,
     lons: xr.DataArray
-) -> py_risico_aggregation.PyIntersectionMap:
+) -> PyIntersectionMap:
     """
     Compute the intersection mapping for features in a GeoDataFrame.
     
@@ -46,7 +46,7 @@ def compute_intersections(
     n_cols = lons.shape[0]
 
     # In our grid, we assume latitude corresponds to the y-coordinate.
-    grid = py_risico_aggregation.PyGrid(
+    grid = PyGrid(
         min_lat=miny,
         max_lat=maxy,
         min_lon=minx,
@@ -62,11 +62,11 @@ def compute_intersections(
         geom_wkt: str = geom.wkt  # Shapely exposes a .wkt attribute.
 
         # Use the feature id as the name.
-        record = py_risico_aggregation.PyGeomRecord(geom_wkt, str(fid))
+        record = PyGeomRecord(geom_wkt, str(fid))
         records.append(record)
 
     # Call the Rust function to compute intersections.
-    intersections: py_risico_aggregation.PyIntersectionMap = py_risico_aggregation.py_get_intersections(grid, records)
+    intersections: PyIntersectionMap = py_get_intersections(grid, records)
     # We assume that intersection_obj behaves like a mapping (it has keys() and __getitem__).
     return intersections
 
@@ -77,7 +77,7 @@ def aggregate_stats(
     hours_resolution: int = 24,
     hours_offset: int = 0,
     *,
-    intersections: py_risico_aggregation.PyIntersectionMap
+    intersections: PyIntersectionMap
 ) -> dict[str, pd.DataFrame]:
     """
     Aggregate statistics using the Rust backend and merge the aggregated results
@@ -123,7 +123,7 @@ def aggregate_stats(
     ]).astype("long")
 
     # Call the Rust function to calculate aggregated statistics.
-    agg_results = py_risico_aggregation.py_calculate_stats(
+    agg_results = py_calculate_stats(
         data_np, timeline_np, intersections, hours_resolution, hours_offset, stats_functions
     )
 
