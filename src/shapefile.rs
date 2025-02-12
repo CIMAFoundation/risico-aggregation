@@ -29,21 +29,18 @@ pub fn read_shapefile(shp_file: &PathBuf, field: &str) -> Result<Vec<GeomRecord>
                 None => return None,
             };
 
-            let bbox = match &shape {
-                shapefile::Shape::Polygon(polygon) => &polygon.bbox().clone(),
-                _ => return None,
-            };
+            // let bbox = match &shape {
+            //     shapefile::Shape::Polygon(polygon) => &polygon.bbox().clone(),
+            //     shapefile::Shape::PolygonM(polygon) => &polygon.bbox().clone(),
+            //     _ => return None,
+            // };
 
             let geometry = match geo_types::Geometry::try_from(shape) {
                 Ok(geom) => geom,
                 Err(_) => return None,
             };
 
-            Some(GeomRecord {
-                geometry,
-                bbox: *bbox,
-                name,
-            })
+            Some(GeomRecord { geometry, name })
         })
         .collect();
 

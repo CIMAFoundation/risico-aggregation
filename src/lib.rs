@@ -1,6 +1,4 @@
-// #[cfg(feature = "python")]
 mod python;
-
 use std::collections::HashMap;
 
 use std::hash::Hash;
@@ -10,6 +8,7 @@ use chrono::{DateTime, Datelike, TimeZone, Utc};
 use euclid::{Box2D, Point2D};
 use geo_rasterize::Transform;
 
+use geo::algorithm::BoundingRect;
 use geo_rasterize::BinaryBuilder;
 use ndarray::{Array1, Array3};
 
@@ -19,8 +18,6 @@ use noisy_float::types::N32;
 use rayon::prelude::*;
 
 use chrono::Duration;
-use shapefile::record::GenericBBox;
-use shapefile::Point;
 use strum_macros::{Display, EnumString};
 
 pub type IntersectionMap = std::collections::HashMap<String, Vec<(usize, usize)>>;
@@ -179,8 +176,6 @@ impl Grid {
 pub struct GeomRecord {
     /// The geometry
     pub geometry: geo_types::Geometry<f64>,
-    /// The bounding box
-    pub bbox: GenericBBox<Point>,
     /// The name of the feature
     pub name: String,
 }
@@ -219,15 +214,9 @@ pub struct GeomRecord {
 ///  ];
 ///  let polygon = Polygon::new(LineString::from(polygon_coords), vec![]);
 ///
-///  // For shapefile bounding box
-///  let bbox = GenericBBox::<Point> {
-///      min: Point::new(0.0, 0.0),
-///      max: Point::new(1.5, 1.5),
-///  };
 ///
 ///  let record = GeomRecord {
 ///     geometry: Geometry::Polygon(polygon),
-///     bbox,
 ///     name: "TestFeature".to_string(),
 ///  };
 ///
@@ -271,18 +260,20 @@ pub fn get_intersections(
     let name_and_coords = records
         .par_iter()
         .filter_map(|record| {
-            let bbox = &record.bbox;
             let geometry = &record.geometry;
             let name = &record.name;
+            let bbox = geometry
+                .bounding_rect()
+                .expect("Could not get bounding box");
 
             let p1 = Point2D {
-                x: bbox.min.x,
-                y: bbox.min.y,
+                x: bbox.min().x,
+                y: bbox.min().y,
                 _unit: PhantomData,
             };
             let p2 = Point2D {
-                x: bbox.max.x,
-                y: bbox.max.y,
+                x: bbox.max().x,
+                y: bbox.max().y,
                 _unit: PhantomData,
             };
             let bbox = Box2D::new(p1, p2);
@@ -600,7 +591,6 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use geo_types::{Coord, Geometry, LineString, Polygon};
     use ndarray::array;
-    use shapefile::{record::GenericBBox, Point};
 
     // Helper function to create a small 3D data array.
     // Dimensions: (time, row, col) = (T, R, C)
@@ -784,15 +774,8 @@ mod tests {
         ];
         let polygon = Polygon::new(LineString::from(polygon_coords), vec![]);
 
-        // For shapefile bounding box
-        let bbox = GenericBBox::<Point> {
-            min: Point::new(0.0, 0.0),
-            max: Point::new(1.5, 1.5),
-        };
-
         let record = GeomRecord {
             geometry: Geometry::Polygon(polygon),
-            bbox,
             name: "TestFeature".to_string(),
         };
 
@@ -845,15 +828,8 @@ mod tests {
         ];
         let polygon = Polygon::new(LineString::from(polygon_coords), vec![]);
 
-        // For shapefile bounding box
-        let bbox = GenericBBox::<Point> {
-            min: Point::new(1.499, 1.499),
-            max: Point::new(1.501, 1.501),
-        };
-
         let record = GeomRecord {
             geometry: Geometry::Polygon(polygon),
-            bbox,
             name: "TestFeature".to_string(),
         };
 
@@ -895,15 +871,8 @@ mod tests {
         ];
         let polygon = Polygon::new(LineString::from(polygon_coords), vec![]);
 
-        // For shapefile bounding box
-        let bbox = GenericBBox::<Point> {
-            min: Point::new(3.0, 3.0),
-            max: Point::new(4.0, 4.0),
-        };
-
         let record = GeomRecord {
             geometry: Geometry::Polygon(polygon),
-            bbox,
             name: "TestFeature".to_string(),
         };
 
@@ -934,14 +903,9 @@ mod tests {
             Coord { x: 0.0, y: 0.0 },
         ];
         let polygon = Polygon::new(LineString::from(polygon_coords), vec![]);
-        let bbox = GenericBBox::<Point> {
-            min: Point::new(0.0, 0.0),
-            max: Point::new(1.5, 1.5),
-        };
 
         let record = GeomRecord {
             geometry: Geometry::Polygon(polygon),
-            bbox,
             name: "TestFeature".to_string(),
         };
 
