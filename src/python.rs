@@ -277,7 +277,7 @@ mod python {
     // Module definition: expose the classes and functions to Python.
     //
     #[pymodule]
-    pub fn rust_risico_aggregation(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    pub fn risico_aggregation(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_class::<PyGrid>()?;
         m.add_class::<PyGeomRecord>()?;
         m.add_class::<PyAggregationResults>()?;
