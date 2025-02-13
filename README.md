@@ -62,7 +62,7 @@ pip install git+https://github.com/CIMAFoundation/risico-aggregation
 ### Usage
 
 ```python
-from risico_aggregation import calculate_stats, compute_intersections
+from risico_aggregation import aggregate_stats, compute_intersections
 import xarray as xr
 import geopandas as gpd
 
