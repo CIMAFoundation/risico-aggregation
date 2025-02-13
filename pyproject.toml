@@ -10,9 +10,6 @@ version = "0.1.0"
 description = "A Python wrapper for my Rust algorithm"
 #authors = "Mirko D'Andrea"
 
-[tool.setuptools]
-packages = ["risico_aggregation"]
-
 
 [tool.maturin]
 # Build artifacts with the specified Cargo profile
@@ -23,3 +20,4 @@ features = ["python"]
 all-features = false
 no-default-features = true
 python-source = "python"
+module-name = "risico_aggregation._lib"
