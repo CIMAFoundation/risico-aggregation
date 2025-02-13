@@ -1,1 +1,1 @@
-from .rust_risico_aggregation import *
+from .risico_aggregation import *

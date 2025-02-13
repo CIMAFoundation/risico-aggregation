@@ -18,4 +18,4 @@ features = ["python"]
 all-features = false
 no-default-features = true
 packages = ["python"]
-include = ["python/**/*"]
+include = ["python/*"]
