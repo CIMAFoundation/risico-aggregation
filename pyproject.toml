@@ -1,13 +1,18 @@
 [build-system]
-requires = ["maturin>=0.12"]
+requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
 
 
 [project]
 name = "risico_aggregation"
+requires-python = ">=3.8"
 version = "0.1.0"
 description = "A Python wrapper for my Rust algorithm"
 #authors = "Mirko D'Andrea"
+
+[tool.setuptools]
+packages = ["risico_aggregation"]
+
 
 [tool.maturin]
 # Build artifacts with the specified Cargo profile
@@ -17,5 +22,4 @@ features = ["python"]
 # Activate all available features
 all-features = false
 no-default-features = true
-packages = ["python"]
-include = ["python/*"]
+python-source = "python"
