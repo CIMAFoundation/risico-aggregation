@@ -94,7 +94,7 @@ pub fn get_stat_function(stat: &StatsFunctionType) -> StatFunction {
 #[derive(Debug)]
 /// A type defining the aggregation results.
 pub struct AggregationResults {
-    pub results: HashMap<String, ndarray::ArcArray2<f32>>,
+    pub results: HashMap<String, ndarray::Array2<f32>>,
     pub feats: ndarray::Array1<String>,
     pub times: ndarray::Array1<DateTime<Utc>>,
 }
@@ -476,7 +476,7 @@ pub fn calculate_stats(
         })
         .collect();
 
-    let mut results: HashMap<String, ndarray::ArcArray2<f32>> = HashMap::new();
+    let mut results: HashMap<String, ndarray::Array2<f32>> = HashMap::new();
     for stat_name in stats_functions.iter().map(|s| s.to_string()) {
         let mut arr = ndarray::Array2::<f32>::zeros((buckets.len(), names.len()));
         for (i, _bucket) in buckets.iter().enumerate() {
@@ -485,7 +485,7 @@ pub fn calculate_stats(
                 arr[[i, j]] = val;
             }
         }
-        results.insert(stat_name, ndarray::ArcArray2::from(arr));
+        results.insert(stat_name, ndarray::Array2::from(arr));
     }
     let feats = ndarray::Array1::from_vec(names.iter().map(|s| s.to_string()).collect());
     let times = buckets.iter().map(|b| b.date_start).collect();

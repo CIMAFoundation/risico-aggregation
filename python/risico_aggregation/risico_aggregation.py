@@ -126,7 +126,7 @@ def aggregate_stats(
     # Convert the input data and timeline to numpy arrays.
     data_np = data.values
     timeline_np = np.array([
-        pd.Timestamp(t).to_pydatetime().timestamp() for t in
+        pd.Timestamp(t, tz=UTC).to_pydatetime().timestamp() for t in
         data.time.values[:]
     ]).astype("long")
 
