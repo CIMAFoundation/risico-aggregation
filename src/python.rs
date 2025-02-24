@@ -212,11 +212,11 @@ mod python {
     #[pyfunction]
     pub fn py_calculate_stats(
         py: Python,
-        data: PyReadonlyArray3<f32>,
-        timeline: PyReadonlyArray1<i64>, // timeline as timestamps (seconds since epoch)
+        data: PyReadonlyArray3<f32>,       // data as 3d array
+        timeline: PyReadonlyArray1<i64>,   // timeline as timestamps (seconds since epoch)
         intersections: &PyIntersectionMap, // expecting a dict: String -> list of (usize, usize)
-        hours_resolution: u32,
-        hours_offset: u32,
+        time_resolution: u32,              // time resolution in seconds
+        time_offset: u32,                  // time offset in seconds
         stats_functions: Vec<String>, // String representations convertible to StatsFunctionType
     ) -> PyResult<PyAggregationResults> {
         let data_array: Array3<f32> = data.as_array().to_owned();
@@ -247,8 +247,8 @@ mod python {
             &data_array,
             &timeline_array,
             &rust_intersections,
-            hours_resolution,
-            hours_offset,
+            time_resolution,
+            time_offset,
             &rust_stats_functions,
         );
 

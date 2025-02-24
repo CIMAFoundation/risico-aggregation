@@ -338,8 +338,8 @@ pub struct TimeBucket {
 /// # Arguments
 ///
 /// * `timeline` - The timeline
-/// * `hours_resolution` - The resolution in hours
-/// * `hours_offset` - The offset in hours
+/// * `time_resolution` - The resolution in seconds
+/// * `time_offset` - The offset in seconds
 ///
 /// # Returns
 ///
@@ -354,7 +354,7 @@ pub struct TimeBucket {
 ///
 /// let timeline = array![Utc.with_ymd_and_hms(2023, 1, 1, 1, 0, 0).unwrap(), Utc.with_ymd_and_hms(2023, 1, 1, 2, 0, 0).unwrap(), Utc.with_ymd_and_hms(2023, 1, 1, 3, 0, 0).unwrap(),Utc.with_ymd_and_hms(2023, 1, 1, 4, 0, 0).unwrap(),Utc.with_ymd_and_hms(2023, 1, 1, 5, 0, 0).unwrap(),Utc.with_ymd_and_hms(2023, 1, 1, 6, 0, 0).unwrap(),Utc.with_ymd_and_hms(2023, 1, 1, 7, 0, 0).unwrap(),Utc.with_ymd_and_hms(2023, 1, 1, 8, 0, 0).unwrap()];
 ///
-/// let result = bucket_times(&timeline, 2, 0);
+/// let result = bucket_times(&timeline, 2*3600, 0);
 ///
 /// // We only check indices here for brevity:
 ///
@@ -372,8 +372,8 @@ pub struct TimeBucket {
 /// ```
 pub fn bucket_times(
     timeline: &Array1<DateTime<Utc>>,
-    hours_resolution: u32,
-    hours_offset: u32,
+    time_resolution: u32,
+    time_offset: u32,
 ) -> Vec<TimeBucket> {
     // Safety check: make sure we have at least one time
     if timeline.is_empty() {
@@ -382,7 +382,7 @@ pub fn bucket_times(
 
     // reference time is based on the first time in the timeline minus the offset and resolution
     let reference_date =
-        (timeline[0] - Duration::hours((hours_offset + hours_resolution) as i64)).date_naive();
+        (timeline[0] - Duration::seconds((time_offset + time_resolution) as i64)).date_naive();
     let reference_time = Utc
         .with_ymd_and_hms(
             reference_date.year(),
@@ -400,9 +400,9 @@ pub fn bucket_times(
     // for loop to iterate on reference_time + offset, reference_time + offset + resolution, ...
     for i in 0.. {
         let start = reference_time
-            + Duration::hours(hours_offset as i64)
-            + Duration::hours(i as i64 * hours_resolution as i64);
-        let end = start + Duration::hours(hours_resolution as i64);
+            + Duration::seconds(time_offset as i64)
+            + Duration::seconds(i as i64 * time_resolution as i64);
+        let end = start + Duration::seconds(time_resolution as i64);
 
         if start >= last {
             break;
@@ -432,11 +432,11 @@ pub fn calculate_stats(
     data: &Array3<f32>,
     timeline: &Array1<DateTime<Utc>>,
     intersections: &IntersectionMap,
-    hours_resolution: u32,
-    hours_offset: u32,
+    time_resolution: u32,
+    time_offset: u32,
     stats_functions: &[StatsFunctionType],
 ) -> AggregationResults {
-    let buckets = bucket_times(timeline, hours_resolution, hours_offset);
+    let buckets = bucket_times(timeline, time_resolution, time_offset);
     let names = intersections.keys().collect::<Vec<_>>();
 
     let data: Vec<Vec<HashMap<String, f32>>> = buckets
@@ -726,8 +726,8 @@ mod tests {
         ];
 
         {
-            // hours_resolution = 2, hours_offset = 0
-            let result = bucket_times(&timeline, 2, 0);
+            // time_resolution = 2, time_offset = 0
+            let result = bucket_times(&timeline, 2 * 3600, 0);
             // We only check indices here for brevity:
             let indices: Vec<Vec<usize>> = result
                 .iter()
@@ -742,8 +742,8 @@ mod tests {
         }
 
         {
-            // hours_resolution = 3, hours_offset = 1
-            let result = bucket_times(&timeline, 3, 1);
+            // time_resolution = 3, time_offset = 1
+            let result = bucket_times(&timeline, 3 * 3600, 3600);
             let indices: Vec<Vec<usize>> = result
                 .iter()
                 .map(|group| group.time_indexes.clone())
@@ -918,15 +918,15 @@ mod tests {
         ];
 
         // Bucket times with resolution=1 => each time step is its own bucket
-        let hours_resolution = 1;
-        let hours_offset = 0;
+        let time_resolution = 3600;
+        let time_offset = 0;
 
         let _aggr_results = calculate_stats(
             &data_3d,
             &timeline,
             &intersections,
-            hours_resolution,
-            hours_offset,
+            time_resolution,
+            time_offset,
             &stats_functions,
         );
 

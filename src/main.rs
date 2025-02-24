@@ -112,24 +112,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &netcdf_data.data,
                     &netcdf_data.timeline,
                     &intersections,
-                    resolution,
-                    offset,
+                    resolution * 3600,
+                    offset * 3600,
                     &functions,
                 );
 
                 let group_name = get_group_name(shp_name, &field, resolution, offset);
 
                 write_results_to_file(&mut out_file, &group_name, results)?;
-
-                // insert_results(
-                //     &mut output_db_conn,
-                //     &the_variable,
-                //     shp_name,
-                //     &field,
-                //     resolution,
-                //     offset,
-                //     &results,
-                // )?;
             }
         }
     }

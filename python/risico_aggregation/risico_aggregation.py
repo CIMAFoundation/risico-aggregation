@@ -1,7 +1,7 @@
 # risico_aggregation_interface.py
 
 import datetime
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional, Protocol, Union
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -12,6 +12,12 @@ from datetime import datetime
 from pytz import UTC
 # Import the compiled Rust module.
 from risico_aggregation._lib import PyIntersectionMap, PyGrid, PyGeomRecord, py_get_intersections, py_calculate_stats
+
+SECONDS_IN_A_DAY = 86400
+
+class TimedeltaLike(Protocol):
+    def total_seconds(self) -> float:
+        ...
 
 def compute_intersections(
     gdf: gpd.GeoDataFrame,
@@ -74,8 +80,8 @@ def aggregate_stats(
     data: xr.DataArray,
     gdf: gpd.GeoDataFrame,
     stats_functions: List[str],
-    hours_resolution: int = 24,
-    hours_offset: int = 0,
+    time_resolution: TimedeltaLike|float|int = pd.Timedelta(seconds=SECONDS_IN_A_DAY),
+    time_offset: TimedeltaLike|float|int = pd.Timedelta(seconds=0),
     *,
     intersections: PyIntersectionMap
 ) -> dict[str, pd.DataFrame]:
@@ -95,10 +101,12 @@ def aggregate_stats(
         A GeoDataFrame containing the geospatial features. The index serves as the feature id.
     stats_functions : List[str]
         A list of statistical function names (e.g. "mean", "sum") to compute.
-    hours_resolution : int, default 24
-        Hours resolution for aggregation.
-    hours_offset : int, default 0
+    time_resolution : int|float|TimedeltaLike
+        Time resolution for aggregation (seconds, or timedelta-like object) 
+        Default: 86400 seconds (1 day).
+    time_offset : int|float|TimedeltaLike
         Hours offset for aggregation.
+        Default: 0.
     
     intersections: risico_aggregation.PyIntersectionMap
         Optional precalculated intersections
@@ -122,9 +130,20 @@ def aggregate_stats(
         data.time.values[:]
     ]).astype("long")
 
+    if isinstance(time_resolution, (int, float)):
+        time_resolution = pd.Timedelta(seconds=time_resolution)
+    
+    if isinstance(time_offset, (int, float)):
+        time_offset = pd.Timedelta(seconds=time_offset)
+
     # Call the Rust function to calculate aggregated statistics.
     agg_results = py_calculate_stats(
-        data_np, timeline_np, intersections, hours_resolution, hours_offset, stats_functions
+        data_np, 
+        timeline_np, 
+        intersections, 
+        time_resolution.total_seconds(), 
+        time_offset.total_seconds(), 
+        stats_functions
     )
 
     # The returned agg_results contains:
