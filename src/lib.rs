@@ -327,6 +327,7 @@ pub fn get_intersections(
     Ok(intersections)
 }
 
+#[derive(Debug)]
 pub struct TimeBucket {
     pub date_start: DateTime<Utc>,
     pub date_end: DateTime<Utc>,

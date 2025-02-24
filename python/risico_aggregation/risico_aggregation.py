@@ -136,13 +136,16 @@ def aggregate_stats(
     if isinstance(time_offset, (int, float)):
         time_offset = pd.Timedelta(seconds=time_offset)
 
+    time_offset_seconds = int(time_offset.total_seconds())
+    time_resolution_seconds = int(time_resolution.total_seconds())
+
     # Call the Rust function to calculate aggregated statistics.
     agg_results = py_calculate_stats(
         data_np, 
         timeline_np, 
         intersections, 
-        time_resolution.total_seconds(), 
-        time_offset.total_seconds(), 
+        time_resolution_seconds, 
+        time_offset_seconds, 
         stats_functions
     )
 
