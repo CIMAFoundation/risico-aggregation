@@ -1,11 +1,14 @@
 # risico_aggregation_interface.py
-
-import datetime
-from typing import List, Dict, Optional, Protocol, Union
+from functools import cache
+import hashlib
+from pathlib import Path
+from typing import List, Optional, Protocol
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 import xarray as xr
+import pickle
+import os
 from shapely.geometry.base import BaseGeometry
 
 from datetime import datetime
@@ -13,16 +16,23 @@ from pytz import UTC
 # Import the compiled Rust module.
 from risico_aggregation._lib import PyIntersectionMap, PyGrid, PyGeomRecord, py_get_intersections, py_calculate_stats
 
-SECONDS_IN_A_DAY = 86400
+STORE_KV_CACHES = {}
 
-class TimedeltaLike(Protocol):
-    def total_seconds(self) -> float:
-        ...
+def get_cache_key(
+    shape_name: str,
+    fid_field: str,
+    lats: xr.DataArray,
+    lons: xr.DataArray,
+) -> str:
+    hash_str = hashlib.md5(np.concat([lats.values, lons.values])).hexdigest()
+    key = f'{shape_name}_{fid_field}_{hash_str}.pkl'
+    return key
 
-def compute_intersections(
+def get_intersections(
     gdf: gpd.GeoDataFrame,
     lats: xr.DataArray,
-    lons: xr.DataArray
+    lons: xr.DataArray,
+    cache_key: Optional[str] = None
 ) -> PyIntersectionMap:
     """
     Compute the intersection mapping for features in a GeoDataFrame.
@@ -44,6 +54,9 @@ def compute_intersections(
     intersections : risico_aggregation.PyIntersectionMap
         A dictionary mapping feature ids (as strings) to lists of (row, col) intersection tuples.
     """
+    if cache_key and cache_key in STORE_KV_CACHES:
+        return STORE_KV_CACHES[cache_key]
+
 
     # Get overall bounds from Latitudes and Longitudes
     minx, maxx = lons.min(), lons.max()
@@ -73,18 +86,17 @@ def compute_intersections(
 
     # Call the Rust function to compute intersections.
     intersections: PyIntersectionMap = py_get_intersections(grid, records)
-    # We assume that intersection_obj behaves like a mapping (it has keys() and __getitem__).
+    
+    if cache_key:
+        STORE_KV_CACHES[cache_key] = intersections
+
     return intersections
 
 def aggregate_stats(
-    data: xr.DataArray,
-    gdf: gpd.GeoDataFrame,
+    data: np.ndarray,
+    intersections: PyIntersectionMap,
     stats_functions: List[str],
-    time_resolution: TimedeltaLike|float|int = pd.Timedelta(seconds=SECONDS_IN_A_DAY),
-    time_offset: TimedeltaLike|float|int = pd.Timedelta(seconds=0),
-    *,
-    intersections: PyIntersectionMap
-) -> dict[str, pd.DataFrame]:
+) -> pd.DataFrame:
     """
     Aggregate statistics using the Rust backend and merge the aggregated results
     into a new GeoDataFrame.
@@ -101,71 +113,35 @@ def aggregate_stats(
         A GeoDataFrame containing the geospatial features. The index serves as the feature id.
     stats_functions : List[str]
         A list of statistical function names (e.g. "mean", "sum") to compute.
-    time_resolution : int|float|TimedeltaLike
-        Time resolution for aggregation (seconds, or timedelta-like object) 
-        Default: 86400 seconds (1 day).
-    time_offset : int|float|TimedeltaLike
-        Hours offset for aggregation.
-        Default: 0.
     
     intersections: risico_aggregation.PyIntersectionMap
         Optional precalculated intersections
         
     Returns
     -------
-    gdf_out : geopandas.GeoDataFrame
-        A new GeoDataFrame with aggregated statistics merged as new columns.
-        The index remains the feature id.
+    pandas.DataFrame
+        A new DataFrame with aggregated statistics as columns, indexed by feature id.
     """
-
-    if intersections is None:
-        lats, lons = data.latitude, data.longitude
-        # First, compute the intersections.
-        intersections = compute_intersections(gdf, lats, lons)
-
-    # Convert the input data and timeline to numpy arrays.
-    data_np = data.values
-    timeline_np = np.array([
-        pd.Timestamp(t, tz=UTC).to_pydatetime().timestamp() for t in
-        data.time.values[:]
-    ]).astype("long")
-
-    if isinstance(time_resolution, (int, float)):
-        time_resolution = pd.Timedelta(seconds=time_resolution)
-    
-    if isinstance(time_offset, (int, float)):
-        time_offset = pd.Timedelta(seconds=time_offset)
-
-    time_offset_seconds = int(time_offset.total_seconds())
-    time_resolution_seconds = int(time_resolution.total_seconds())
 
     # Call the Rust function to calculate aggregated statistics.
     agg_results = py_calculate_stats(
-        data_np, 
-        timeline_np, 
+        data, 
         intersections, 
-        time_resolution_seconds, 
-        time_offset_seconds, 
         stats_functions
     )
 
     # The returned agg_results contains:
     #   - results: a dict mapping statistic names to 2D numpy arrays (shape: [n_times, n_feats])
     #   - feats: a list of feature ids (as strings)
-    #   - times: a numpy array of timestamps.
-    
-    # 
 
-    df_out = {}
-    times = [datetime.fromtimestamp(t, tz=UTC) for t in agg_results.times]
     feats = agg_results.feats
+    df_out = pd.DataFrame(index=feats, columns=stats_functions)    
     for stat, values in agg_results.results.items():
-        df = pd.DataFrame(
+        serie = pd.Series(
             values, 
-            index=times, 
-            columns=feats
+            index=feats
         )
-        df_out[stat] = df
+        df_out[stat] = serie
 
     return df_out
 

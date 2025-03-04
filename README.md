@@ -62,7 +62,7 @@ pip install git+https://github.com/CIMAFoundation/risico-aggregation
 ### Usage
 
 ```python
-from risico_aggregation import aggregate_stats, compute_intersections
+from risico_aggregation import aggregate_stats, get_intersections, get_cache_key
 import xarray as xr
 import geopandas as gpd
 
@@ -70,11 +70,11 @@ ds = xr.open_dataset('V.nc')
 gdf = gpd.read_file('comuni_ISTAT2001.shp')
 gdf.set_index('PRO_COM', inplace=True)
 
-intersections = compute_intersections(gdf, ds.latitude, ds.longitude)
+cache_key = get_cache_key('prova', 'id', ds.latitude, ds.longitude)
+intersections = compute_intersections(gdf, ds.latitude, ds.longitude, cache_key)
 
 dfs = aggregate_stats(
-    data=ds.V,
-    gdf=gdf,
+    data=ds.V.values[:],
     stats_functions=['MAX', 'PERC75', "MEAN"],
     intersections=intersections
 )

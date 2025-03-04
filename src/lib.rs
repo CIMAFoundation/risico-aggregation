@@ -10,7 +10,7 @@ use geo_rasterize::Transform;
 
 use geo::algorithm::BoundingRect;
 use geo_rasterize::BinaryBuilder;
-use ndarray::{Array1, Array3};
+use ndarray::{s, Array1, Array3, ArrayView3};
 
 use kolmogorov_smirnov::percentile;
 
@@ -97,6 +97,11 @@ pub struct AggregationResults {
     pub results: HashMap<String, ndarray::Array2<f32>>,
     pub feats: ndarray::Array1<String>,
     pub times: ndarray::Array1<DateTime<Utc>>,
+}
+
+pub struct AggregationResultsNoTime {
+    pub results: HashMap<String, ndarray::Array1<f32>>,
+    pub feats: ndarray::Array1<String>,
 }
 
 /// A struct to hold the grid information.
@@ -429,6 +434,20 @@ pub fn bucket_times(
     buckets
 }
 
+/// Calculate the statistics on the data cube on a timeline for the given intersections.
+///
+/// # Arguments
+/// * `data` - The data cube (time, row, col)
+/// * `timeline` - The timeline
+/// * `intersections` - The intersections
+/// * `time_resolution` - The resolution in seconds
+/// * `time_offset` - The offset in seconds
+/// * `stats_functions` - The statistics functions to apply
+///
+/// # Returns
+/// An `AggregationResults` struct containing the results.
+///
+/// # Example
 pub fn calculate_stats(
     data: &Array3<f32>,
     timeline: &Array1<DateTime<Utc>>,
@@ -440,39 +459,14 @@ pub fn calculate_stats(
     let buckets = bucket_times(timeline, time_resolution, time_offset);
     let names = intersections.keys().collect::<Vec<_>>();
 
-    let data: Vec<Vec<HashMap<String, f32>>> = buckets
+    let data: Vec<AggregationResultsNoTime> = buckets
         .iter()
         .map(|bucket| {
             let ix_start = *bucket.time_indexes.first().expect("has at least one time");
             let ix_end = *bucket.time_indexes.last().expect("has at least one time");
 
-            let feats: Vec<HashMap<String, f32>> = names
-                .par_iter()
-                .map(|fid| {
-                    let coords = intersections
-                        .get(*fid)
-                        .expect("name should be in intersections");
-                    let mut stats = HashMap::new();
-
-                    // [TODO] insertion sort for speeding up processing
-                    let vals: Array1<N32> = (ix_start..=ix_end)
-                        .flat_map(|t_ix| coords.iter().map(move |(row, col)| (t_ix, *row, *col)))
-                        .map(|(t_ix, row, col)| data[[t_ix, row, col]])
-                        .filter(|x| *x != NODATA && !x.is_nan())
-                        .map(N32::from_f32)
-                        .collect();
-
-                    stats_functions.iter().for_each(|stat_fun_type| {
-                        let stat_name = stat_fun_type.to_string();
-                        let stat_fn = get_stat_function(stat_fun_type);
-                        let stat = stat_fn(&vals);
-                        stats.insert(stat_name.to_string(), stat);
-                    });
-
-                    stats
-                })
-                .collect();
-            feats
+            let cube = data.slice(s![ix_start..=ix_end, .., ..]);
+            calculate_stats_on_cube(cube, intersections, stats_functions)
         })
         .collect();
 
@@ -481,7 +475,7 @@ pub fn calculate_stats(
         let mut arr = ndarray::Array2::<f32>::zeros((buckets.len(), names.len()));
         for (i, _bucket) in buckets.iter().enumerate() {
             for (j, _name) in names.iter().enumerate() {
-                let val = data[i][j].get(&stat_name).copied().unwrap_or(f32::NAN);
+                let val = data[i].results[&stat_name][j];
                 arr[[i, j]] = val;
             }
         }
@@ -495,6 +489,55 @@ pub fn calculate_stats(
         feats,
         times,
     }
+}
+
+pub fn calculate_stats_on_cube(
+    data: ArrayView3<f32>,
+    intersections: &IntersectionMap,
+    stats_functions: &[StatsFunctionType],
+) -> AggregationResultsNoTime {
+    let n_times = data.shape()[0];
+    let names = intersections.keys().collect::<Vec<_>>();
+    let data: Vec<HashMap<String, f32>> = names
+        .par_iter()
+        .map(|fid| {
+            let coords = intersections
+                .get(*fid)
+                .expect("name should be in intersections");
+            let mut stats = HashMap::new();
+
+            // [TODO] insertion sort for speeding up processing
+            let vals: Array1<N32> = (0..n_times)
+                .flat_map(|t_ix| coords.iter().map(move |(row, col)| (t_ix, *row, *col)))
+                .map(|(t_ix, row, col)| data[[t_ix, row, col]])
+                .filter(|x| *x != NODATA && !x.is_nan())
+                .map(N32::from_f32)
+                .collect();
+
+            stats_functions.iter().for_each(|stat_fun_type| {
+                let stat_name = stat_fun_type.to_string();
+                let stat_fn = get_stat_function(stat_fun_type);
+                let stat = stat_fn(&vals);
+                stats.insert(stat_name.to_string(), stat);
+            });
+
+            stats
+        })
+        .collect();
+
+    let mut results: HashMap<String, ndarray::Array1<f32>> = HashMap::new();
+    for stat_name in stats_functions.iter().map(|s| s.to_string()) {
+        let mut arr = ndarray::Array1::<f32>::zeros((names.len(),));
+        for (j, _name) in names.iter().enumerate() {
+            let val = data[j].get(&stat_name).copied().unwrap_or(f32::NAN);
+            arr[j] = val;
+        }
+
+        results.insert(stat_name, ndarray::Array1::from(arr));
+    }
+    let feats = ndarray::Array1::from_vec(names.iter().map(|s| s.to_string()).collect());
+
+    AggregationResultsNoTime { results, feats }
 }
 
 pub fn max(arr: &ndarray::Array1<N32>) -> f32 {
@@ -959,5 +1002,58 @@ mod tests {
         // assert_eq!(map_1["MIN"], 10.0);
         // assert_eq!(map_1["MAX"], 50.0);
         // assert!((map_1["MEAN"] - 30.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_calculate_stats_on_cube() {
+        let data_3d = create_test_array_3d();
+
+        // Create a simple Grid: lat=0..2, lon=0..2, step=1 => 3 rows, 3 cols
+        let grid = Grid::new(0.0, 2.0, 0.0, 2.0, 3, 3);
+
+        // We create a single polygon that covers row=0..1, col=0..1 in pixel space.
+        let polygon_coords = vec![
+            Coord { x: 0.0, y: 0.0 },
+            Coord { x: 1.5, y: 0.0 },
+            Coord { x: 1.5, y: 1.5 },
+            Coord { x: 0.0, y: 1.5 },
+            Coord { x: 0.0, y: 0.0 },
+        ];
+        let polygon = Polygon::new(LineString::from(polygon_coords), vec![]);
+
+        let record = GeomRecord {
+            geometry: Geometry::Polygon(polygon),
+            name: "TestFeature".to_string(),
+        };
+
+        let intersections = get_intersections(&grid, vec![record]).unwrap();
+        // We'll define some stats functions
+        let stats_functions: Vec<StatsFunctionType> = vec![
+            super::StatsFunctionType::MIN,
+            super::StatsFunctionType::MEAN,
+            super::StatsFunctionType::MAX,
+        ];
+
+        // Slice the data cube for the first time step
+        let data_slice = data_3d.slice(s![0..1, .., ..]);
+
+        let aggr_results = calculate_stats_on_cube(data_slice, &intersections, &stats_functions);
+
+        // We have just 1 feature => "TestFeature"
+        assert_eq!(aggr_results.feats.len(), 1);
+        let feat_name = &aggr_results.feats[0];
+        assert_eq!(feat_name, "TestFeature");
+
+        // For time step 0, row=0..1,col=0..1 => data at:
+        //  data[[0,0,0]] = 1.0, data[[0,0,1]] = 2.0, data[[0,1,0]] = 4.0, data[[0,1,1]] = 5.0
+        //
+        // => min=1, max=5, mean= (1+2+4+5)/4=3.0
+        let min_val = aggr_results.results["MIN"][0];
+        let max_val = aggr_results.results["MAX"][0];
+        let mean_val = aggr_results.results["MEAN"][0];
+
+        assert_eq!(min_val, 1.0);
+        assert_eq!(max_val, 5.0);
+        assert!((mean_val - 3.0).abs() < 1e-6);
     }
 }

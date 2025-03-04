@@ -1,10 +1,9 @@
 #[cfg(feature = "python")]
 mod python {
-    use chrono::{TimeZone, Utc};
     use geo::Polygon;
     use geo_types::MultiPolygon;
-    use ndarray::{Array1, Array3};
-    use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray3, ToPyArray};
+    use ndarray::{s, Array3};
+    use numpy::{PyReadonlyArray3, ToPyArray};
     use pyo3::exceptions;
     use pyo3::prelude::*;
     use std::collections::HashMap;
@@ -12,7 +11,8 @@ mod python {
 
     // Import your library types and functions from lib.rs.
     use crate::{
-        calculate_stats, get_intersections, GeomRecord, Grid, IntersectionMap, StatsFunctionType,
+        calculate_stats_on_cube, get_intersections, GeomRecord, Grid, IntersectionMap,
+        StatsFunctionType,
     };
 
     /// Ensure GeomRecord is cloneable.
@@ -94,9 +94,8 @@ mod python {
     //
     #[pyclass]
     pub struct PyAggregationResults {
-        results: PyObject, // Python dict: String -> numpy.ndarray (2d)
+        results: PyObject, // Python dict: String -> numpy.ndarray (1d)
         feats: Vec<String>,
-        times: PyObject, // NumPy array (1d) of timestamps (i64)
     }
 
     #[pymethods]
@@ -109,11 +108,6 @@ mod python {
         #[getter]
         pub fn feats(&self) -> Vec<String> {
             self.feats.clone()
-        }
-
-        #[getter]
-        pub fn times(&self, py: Python) -> PyObject {
-            self.times.clone_ref(py)
         }
     }
 
@@ -213,21 +207,9 @@ mod python {
     pub fn py_calculate_stats(
         py: Python,
         data: PyReadonlyArray3<f32>,       // data as 3d array
-        timeline: PyReadonlyArray1<i64>,   // timeline as timestamps (seconds since epoch)
         intersections: &PyIntersectionMap, // expecting a dict: String -> list of (usize, usize)
-        time_resolution: u32,              // time resolution in seconds
-        time_offset: u32,                  // time offset in seconds
         stats_functions: Vec<String>, // String representations convertible to StatsFunctionType
     ) -> PyResult<PyAggregationResults> {
-        let data_array: Array3<f32> = data.as_array().to_owned();
-
-        let timeline_slice = timeline.as_slice()?;
-        let timeline_vec: Vec<_> = timeline_slice
-            .iter()
-            .map(|&ts| Utc.timestamp_opt(ts, 0).single().unwrap())
-            .collect();
-        let timeline_array: Array1<_> = Array1::from(timeline_vec);
-
         // Convert the intersections PyObject into a PyDict.
         let rust_intersections = &intersections.inner;
 
@@ -242,15 +224,10 @@ mod python {
                 })
             })
             .collect::<Result<_, _>>()?;
-
-        let aggregation_results = calculate_stats(
-            &data_array,
-            &timeline_array,
-            &rust_intersections,
-            time_resolution,
-            time_offset,
-            &rust_stats_functions,
-        );
+        let data_array = data.as_array();
+        let cube = data_array.slice(s![.., .., ..]);
+        let aggregation_results =
+            calculate_stats_on_cube(cube, rust_intersections, &rust_stats_functions);
 
         let mut py_results_map: HashMap<String, PyObject> = HashMap::new();
         for (key, array2) in aggregation_results.results {
@@ -259,17 +236,9 @@ mod python {
         }
         let py_results = py_results_map.into_py(py);
 
-        let times_vec: Vec<i64> = aggregation_results
-            .times
-            .iter()
-            .map(|dt| dt.timestamp())
-            .collect();
-        let py_times = PyArray1::from_vec(py, times_vec).to_owned();
-
         Ok(PyAggregationResults {
             results: py_results,
             feats: aggregation_results.feats.into_raw_vec_and_offset().0,
-            times: py_times.into_py(py),
         })
     }
 
