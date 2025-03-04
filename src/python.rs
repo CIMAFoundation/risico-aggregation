@@ -2,7 +2,7 @@
 mod python {
     use geo::Polygon;
     use geo_types::MultiPolygon;
-    use ndarray::{s, Array3};
+    use ndarray::s;
     use numpy::{PyReadonlyArray3, ToPyArray};
     use pyo3::exceptions;
     use pyo3::prelude::*;

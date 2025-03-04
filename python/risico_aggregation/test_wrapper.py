@@ -5,7 +5,6 @@ import xarray as xr
 from pathlib import Path
 
 ds = xr.open_dataset("/opt/risico/RISICO2023/OUTPUT-NC/V.nc")
-#ds = xr.open_dataset("~/Downloads/VNDWI.nc")
 gdf = gpd.read_file('/opt/risico/AGGREGATION_CACHE/shp/Italia/regioni_ISTAT2001.shp')
 gdf.set_index('COD_REG', inplace=True)
 
