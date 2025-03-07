@@ -62,22 +62,34 @@ pip install git+https://github.com/CIMAFoundation/risico-aggregation
 ### Usage
 
 ```python
-from risico_aggregation import aggregate_stats, get_intersections, get_cache_key
-import xarray as xr
 import geopandas as gpd
+import xarray as xr
+from risico_aggregation import (aggregate_stats, get_cache_key,
+                                get_intersections)
 
-ds = xr.open_dataset('V.nc')
-gdf = gpd.read_file('comuni_ISTAT2001.shp')
-gdf.set_index('PRO_COM', inplace=True)
+from python.risico_aggregation.risico_aggregation import aggregate_on_pixels
+
+ds = xr.open_dataset("V.nc")
+gdf = gpd.read_file('regioni_ISTAT2001.shp')
+gdf.set_index('COD_REG', inplace=True)
 
 cache_key = get_cache_key('prova', 'id', ds.latitude, ds.longitude)
-intersections = compute_intersections(gdf, ds.latitude, ds.longitude, cache_key)
+intersections = get_intersections(gdf, ds.latitude, ds.longitude, cache_key=cache_key)
+
+dsd = ds.V.values[:]
 
 dfs = aggregate_stats(
-    data=ds.V.values[:],
-    stats_functions=['MAX', 'PERC75', "MEAN"],
-    intersections=intersections
+    data=dsd,
+    stats_functions=['PERC75', 'MEAN', 'MAX'],
+    intersections=intersections,
 )
 print(dfs)
+
+# Or use the single-pixel aggregation
+dsd = ds.V.values[:]
+vals = aggregate_on_pixels(
+    data=dsd,
+    stat_function='PERC75',
+)
 ```
 
