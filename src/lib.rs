@@ -10,7 +10,7 @@ use geo_rasterize::Transform;
 
 use geo::algorithm::BoundingRect;
 use geo_rasterize::BinaryBuilder;
-use ndarray::{s, Array1, Array3, ArrayView3};
+use ndarray::{s, Array1, Array2, Array3, ArrayView3, Axis};
 
 use kolmogorov_smirnov::percentile;
 
@@ -538,6 +538,44 @@ pub fn calculate_stats_on_cube(
     let feats = ndarray::Array1::from_vec(names.iter().map(|s| s.to_string()).collect());
 
     AggregationResultsNoTime { results, feats }
+}
+
+pub fn calculate_stat_on_pixels(
+    data: ArrayView3<f32>,
+    stat_function: StatsFunctionType,
+) -> Array2<f32> {
+    let n_times = data.shape()[0];
+    let n_rows = data.shape()[1];
+    let n_cols = data.shape()[2];
+
+    // iterate over the pixels, parallelize over the rows
+    let results = (0..n_rows)
+        .into_par_iter()
+        .map(|row| {
+            let mut result_row = Array1::<f32>::zeros(n_cols);
+            let stat_fn = get_stat_function(&stat_function);
+            for col in 0..n_cols {
+                let vals: Array1<N32> = (0..n_times)
+                    .map(|t_ix| data[[t_ix, row, col]])
+                    .filter(|x| *x != NODATA && !x.is_nan())
+                    .map(N32::from_f32)
+                    .collect();
+
+                let stat = stat_fn(&vals);
+                result_row[col] = stat;
+            }
+            result_row
+        })
+        .collect::<Vec<_>>();
+
+    // convert Vec<Array1<f32>> to Array2<f32>
+    let results = ndarray::stack(
+        Axis(0),
+        &results.iter().map(|v| v.view()).collect::<Vec<_>>(),
+    )
+    .expect("Could not stack arrays");
+
+    results
 }
 
 pub fn max(arr: &ndarray::Array1<N32>) -> f32 {

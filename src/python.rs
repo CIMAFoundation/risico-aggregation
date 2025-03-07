@@ -3,6 +3,7 @@ mod python {
     use geo::Polygon;
     use geo_types::MultiPolygon;
     use ndarray::s;
+    use numpy::{IntoPyArray, PyArray2};
     use numpy::{PyReadonlyArray3, ToPyArray};
     use pyo3::exceptions;
     use pyo3::prelude::*;
@@ -11,8 +12,8 @@ mod python {
 
     // Import your library types and functions from lib.rs.
     use crate::{
-        calculate_stats_on_cube, get_intersections, GeomRecord, Grid, IntersectionMap,
-        StatsFunctionType,
+        calculate_stat_on_pixels, calculate_stats_on_cube, get_intersections, GeomRecord, Grid,
+        IntersectionMap, StatsFunctionType,
     };
 
     /// Ensure GeomRecord is cloneable.
@@ -242,6 +243,27 @@ mod python {
         })
     }
 
+    #[pyfunction]
+    pub fn py_calculate_stat_on_pixels(
+        py: Python,
+        data: PyReadonlyArray3<f32>, // data as 3d array
+        stat_function: String,       // String representations convertible to StatsFunctionType
+    ) -> PyResult<Py<PyArray2<f32>>> {
+        // Convert the intersections PyObject into a PyDict.
+        let rust_stat = stat_function.parse().map_err(|_| {
+            PyErr::new::<exceptions::PyValueError, _>(format!(
+                "Invalid stats function: {}",
+                stat_function
+            ))
+        })?;
+
+        let data_array = data.as_array();
+        let cube = data_array.slice(s![.., .., ..]);
+        let results = calculate_stat_on_pixels(cube, rust_stat);
+        let py_array = results.into_pyarray(py).try_into()?;
+        Ok(py_array)
+    }
+
     //
     // Module definition: expose the classes and functions to Python.
     //
@@ -253,6 +275,7 @@ mod python {
         m.add_class::<PyIntersectionMap>()?;
         m.add_function(wrap_pyfunction!(py_get_intersections, m)?)?;
         m.add_function(wrap_pyfunction!(py_calculate_stats, m)?)?;
+        m.add_function(wrap_pyfunction!(py_calculate_stat_on_pixels, m)?)?;
         Ok(())
     }
 }

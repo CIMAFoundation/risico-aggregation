@@ -1,8 +1,9 @@
-from risico_aggregation import aggregate_stats, get_intersections, get_cache_key
 import geopandas as gpd
-import pandas as pd
 import xarray as xr
-from pathlib import Path
+from risico_aggregation import (aggregate_stats, get_cache_key,
+                                get_intersections)
+
+from python.risico_aggregation.risico_aggregation import aggregate_on_pixels
 
 ds = xr.open_dataset("/opt/risico/RISICO2023/OUTPUT-NC/V.nc")
 gdf = gpd.read_file('/opt/risico/AGGREGATION_CACHE/shp/Italia/regioni_ISTAT2001.shp')
@@ -19,3 +20,10 @@ dfs = aggregate_stats(
     intersections=intersections,
 )
 print(dfs)
+
+
+dsd = ds.V.values[:]
+vals = aggregate_on_pixels(
+    data=dsd,
+    stat_function='PERC75',
+)

@@ -14,7 +14,7 @@ from shapely.geometry.base import BaseGeometry
 from datetime import datetime
 from pytz import UTC
 # Import the compiled Rust module.
-from risico_aggregation._lib import PyIntersectionMap, PyGrid, PyGeomRecord, py_get_intersections, py_calculate_stats
+from risico_aggregation._lib import PyIntersectionMap, PyGrid, PyGeomRecord, py_get_intersections, py_calculate_stats, py_calculate_stat_on_pixels
 
 STORE_KV_CACHES = {}
 
@@ -144,4 +144,39 @@ def aggregate_stats(
         df_out[stat] = serie
 
     return df_out
+
+
+def aggregate_on_pixels(
+    data: np.ndarray,
+    stat_function: str,
+) -> np.ndarray:
+    """
+    Aggregate statistics using the Rust backend and merge the aggregated results
+    into a new GeoDataFrame.
+    
+    This function computes the intersections based on the input GeoDataFrame (with its index as fid),
+    then calls the Rust function to aggregate statistics on the provided data, and finally merges
+    the aggregated results as new columns into the original GeoDataFrame.
+    
+    Parameters
+    ----------
+    data : xr.DataArray
+        A 3D array of input data (e.g. measurements) for aggregation.
+    stat_function : str
+        Stat function name to compute.
+        
+    Returns
+    -------
+    np.ndarray
+        a 2D numpy array (shape: [n_rows, n_cols])
+    """
+
+    # Call the Rust function to calculate aggregated statistics.
+    results = py_calculate_stat_on_pixels(
+        data, 
+        stat_function
+    )
+
+
+    return results
 
