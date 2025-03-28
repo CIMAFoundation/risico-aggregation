@@ -177,8 +177,10 @@ pub fn write_aggregation_as_raster_results_to_file(
 ) -> Result<(), io::Error> {
     // Create a new file with default settings
     for (stat_name, stat_values) in results.results.iter() {
-        let var_name = format!("{}-{}", var_name, stat_name);
-        let file_name = format!("{}-{}.nc", var_name, stat_name);
+        // fix var name for backward compatibility
+        let stat_name = stat_name.replace("PERC", "P");
+        let var_name = format!("{var_name}-{stat_name}");
+        let file_name = format!("{var_name}.nc");
         let file_path = output_path.join(file_name);
         let times = &results.times;
 
@@ -189,7 +191,7 @@ pub fn write_aggregation_as_raster_results_to_file(
 
         write_netcdf(
             &file_path,
-            stat_name,
+            &var_name,
             stat_values_cube.as_slice().unwrap(),
             grid,
             times,

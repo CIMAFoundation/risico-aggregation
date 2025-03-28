@@ -29,9 +29,6 @@ struct Args {
 
     #[clap(long, help = "Path to the intersection cache file")]
     intersection_cache: Option<PathBuf>,
-
-    #[clap(long, help = "Output path")]
-    output: PathBuf,
 }
 
 pub fn shapefile_aggregation(
@@ -40,7 +37,7 @@ pub fn shapefile_aggregation(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let output_path = &config.output_path;
 
-    let mut intersection_db_conn = Connection::open(&intersection_db_file)?;
+    let mut intersection_db_conn = Connection::open(intersection_db_file)?;
 
     let input_path = &config.input_path;
 
@@ -85,12 +82,12 @@ pub fn shapefile_aggregation(
                     &mut intersection_db_conn,
                     &netcdf_data.grid,
                     shp_name,
-                    &field,
+                    field,
                 )? {
                     Some(data) => data,
                     None => {
                         let start = Instant::now();
-                        let records = read_shapefile(&shp_file, &field)?;
+                        let records = read_shapefile(&shp_file, field)?;
                         println!("Reading shapefile took {:?}", start.elapsed());
 
                         let start = Instant::now();
@@ -101,7 +98,7 @@ pub fn shapefile_aggregation(
                             &mut intersection_db_conn,
                             &netcdf_data.grid,
                             shp_name,
-                            &field,
+                            field,
                             &intersections,
                         )?;
                         intersections
@@ -116,7 +113,7 @@ pub fn shapefile_aggregation(
                     &functions,
                 );
 
-                let group_name = get_group_name(shp_name, &field, resolution, offset);
+                let group_name = get_group_name(shp_name, field, resolution, offset);
 
                 write_aggregation_to_shapefile_results_to_file(
                     &mut out_file,
