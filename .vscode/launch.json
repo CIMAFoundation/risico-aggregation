@@ -39,13 +39,8 @@
                 }
             },
             "args": [
-                "/opt/risico/AGGREGATION_CACHE/shp/lazio/comuni.shp",
-                "id_risico",
-                "/share/archivio/experience/data/MeteoModels/RISICOLAZIO/2025/01/30/0000/VPPF.nc",
-                "VPPF",
-                "PERC75",
-                "--intersection-cache",
-                "./intersections.db"
+                "--config",
+                "data/aggregation-config.yaml"
             ],
             "cwd": "${workspaceFolder}"
         },
