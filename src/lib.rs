@@ -673,12 +673,12 @@ pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentil
 
     let over_threshold = arr
         .iter()
-        .filter(|&x| *x >= perc_value)
+        .filter(|&x| *x > perc_value)
         .copied()
         .collect::<Array1<N32>>();
 
     if over_threshold.is_empty() {
-        return f32::NAN;
+        return perc_value.into();
     }
     let maybe_mean = over_threshold.mean();
     if let Some(mean) = maybe_mean {
@@ -703,7 +703,7 @@ pub fn mean_of_values_below_percentile(arr: &ndarray::Array1<N32>, the_percentil
         .collect::<Array1<N32>>();
 
     if below_threshold.is_empty() {
-        return f32::NAN;
+        return perc_value.into();
     }
     let maybe_mean = below_threshold.mean();
     if let Some(mean) = maybe_mean {
