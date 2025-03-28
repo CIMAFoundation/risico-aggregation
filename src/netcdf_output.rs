@@ -1,7 +1,10 @@
+use chrono::{DateTime, Utc};
+use ndarray::{Array1, Array3};
 use netcdf::types::{NcTypeDescriptor, NcVariableType};
 use netcdf::{self, Extents, FileMut, Result};
-use risico_aggregation::AggregationResults;
+use risico_aggregation::{Grid, RasterAggregationResults, ShapefileAggregationResults};
 use std::ffi::CString;
+use std::io;
 use std::path::Path;
 
 #[repr(transparent)]
@@ -36,10 +39,10 @@ pub fn get_group_name(shp_name: &str, fid: &str, resolution: u32, offset: u32) -
 }
 
 /// Write the results to a group in the netCDF file.
-pub fn write_results_to_file(
+pub fn write_aggregation_to_shapefile_results_to_file(
     file: &mut FileMut,
     group_name: &str,
-    results: AggregationResults,
+    results: ShapefileAggregationResults,
 ) -> Result<()> {
     let rows = results.times.len();
     let cols = results.feats.len();
@@ -85,6 +88,113 @@ pub fn write_results_to_file(
         var.set_compression(9, true)
             .expect("Can set compression level");
         var.put_values(matrix.as_slice().unwrap(), Extents::All)?;
+    }
+
+    Ok(())
+}
+
+fn write_netcdf(
+    file_name: &Path,
+    variable: &str,
+    values: &[f32],
+    grid: &Grid,
+    times: &Array1<DateTime<Utc>>,
+    compression_rate: u8,
+) -> Result<(), io::Error> {
+    // Create a new file with default settings
+    let options = netcdf::Options::NETCDF4;
+
+    let mut file = netcdf::create_with(file_name, options)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    // We must create a dimension which corresponds to our data
+    let n_lats = grid.n_rows;
+    let n_lons = grid.n_cols;
+    let lats: Vec<f64> = (0..n_lats)
+        .map(|i| grid.min_lat + (grid.max_lat - grid.min_lat) * (i as f64) / (grid.n_rows as f64))
+        .collect();
+    let lons: Vec<f64> = (0..n_lons)
+        .map(|i| grid.min_lon + (grid.max_lon - grid.min_lon) * (i as f64) / (grid.n_cols as f64))
+        .collect();
+
+    file.add_dimension("latitude", n_lats).unwrap();
+    file.add_dimension("longitude", n_lons).unwrap();
+    file.add_dimension("time", times.len()).unwrap();
+
+    let mut var = file
+        .add_variable::<f32>("latitude", &["latitude"])
+        .expect("Add latitude failed");
+
+    var.set_compression(compression_rate as i32, true)
+        .expect("Set compression failed");
+    var.put_values(&lats, Extents::All)
+        .expect("Add longitude failed");
+
+    let mut var = file
+        .add_variable::<f32>("longitude", &["longitude"])
+        .expect("Add longitude failed");
+
+    var.set_compression(compression_rate as i32, true)
+        .expect("Set compression failed");
+    var.put_values(&lons, Extents::All)
+        .expect("Add longitude failed");
+
+    let mut var = file
+        .add_variable::<i64>("time", &["time"])
+        .expect("Add time failed");
+
+    var.put_attribute("units", "seconds since 1970-01-01 00:00:00")
+        .unwrap_or_else(|_| panic!("Add time units failed"));
+    var.put_attribute("long_name", "time")
+        .unwrap_or_else(|_| panic!("Add time units failed"));
+    var.put_attribute("calendar", "proleptic_gregorian")
+        .unwrap_or_else(|_| panic!("Add time units failed"));
+
+    let times: Vec<i64> = times.iter().map(|t| t.timestamp()).collect();
+
+    var.set_compression(compression_rate as i32, true)
+        .expect("Set compression failed");
+    var.put_values(&times, Extents::All)
+        .unwrap_or_else(|_| panic!("Add time failed"));
+
+    let mut var = file
+        .add_variable::<f32>(variable, &["time", "latitude", "longitude"])
+        .unwrap_or_else(|_| panic!("Add {variable} failed"));
+
+    var.set_compression(compression_rate as i32, true)
+        .expect("Set compression failed");
+    var.put_values(values, Extents::All)
+        .unwrap_or_else(|err| panic!("Add {variable} failed: {err}"));
+
+    Ok(())
+}
+
+pub fn write_aggregation_as_raster_results_to_file(
+    output_path: &Path,
+    var_name: &str,
+    results: RasterAggregationResults,
+    grid: &Grid,
+) -> Result<(), io::Error> {
+    // Create a new file with default settings
+    for (stat_name, stat_values) in results.results.iter() {
+        let var_name = format!("{}-{}", var_name, stat_name);
+        let file_name = format!("{}-{}.nc", var_name, stat_name);
+        let file_path = output_path.join(file_name);
+        let times = &results.times;
+
+        let stat_values_cube: Array3<f32> =
+            Array3::from_shape_fn((times.len(), grid.n_rows, grid.n_cols), |(t, lat, lon)| {
+                stat_values[t][(lat, lon)]
+            });
+
+        write_netcdf(
+            &file_path,
+            stat_name,
+            stat_values_cube.as_slice().unwrap(),
+            grid,
+            times,
+            9,
+        )?;
     }
 
     Ok(())

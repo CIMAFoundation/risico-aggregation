@@ -93,15 +93,20 @@ pub fn get_stat_function(stat: &StatsFunctionType) -> StatFunction {
 
 #[derive(Debug)]
 /// A type defining the aggregation results.
-pub struct AggregationResults {
+pub struct ShapefileAggregationResults {
     pub results: HashMap<String, ndarray::Array2<f32>>,
     pub feats: ndarray::Array1<String>,
     pub times: ndarray::Array1<DateTime<Utc>>,
 }
 
-pub struct AggregationResultsNoTime {
+pub struct ShapefileAggregationResultsNoTime {
     pub results: HashMap<String, ndarray::Array1<f32>>,
     pub feats: ndarray::Array1<String>,
+}
+
+pub struct RasterAggregationResults {
+    pub times: ndarray::Array1<DateTime<Utc>>,
+    pub results: HashMap<String, Vec<ndarray::Array2<f32>>>,
 }
 
 /// A struct to hold the grid information.
@@ -455,11 +460,11 @@ pub fn calculate_stats(
     time_resolution: u32,
     time_offset: u32,
     stats_functions: &[StatsFunctionType],
-) -> AggregationResults {
+) -> ShapefileAggregationResults {
     let buckets = bucket_times(timeline, time_resolution, time_offset);
     let names = intersections.keys().collect::<Vec<_>>();
 
-    let data: Vec<AggregationResultsNoTime> = buckets
+    let data: Vec<ShapefileAggregationResultsNoTime> = buckets
         .iter()
         .map(|bucket| {
             let ix_start = *bucket.time_indexes.first().expect("has at least one time");
@@ -484,7 +489,7 @@ pub fn calculate_stats(
     let feats = ndarray::Array1::from_vec(names.iter().map(|s| s.to_string()).collect());
     let times = buckets.iter().map(|b| b.date_start).collect();
 
-    AggregationResults {
+    ShapefileAggregationResults {
         results,
         feats,
         times,
@@ -495,7 +500,7 @@ pub fn calculate_stats_on_cube(
     data: ArrayView3<f32>,
     intersections: &IntersectionMap,
     stats_functions: &[StatsFunctionType],
-) -> AggregationResultsNoTime {
+) -> ShapefileAggregationResultsNoTime {
     let n_times = data.shape()[0];
     let names = intersections.keys().collect::<Vec<_>>();
     let data: Vec<HashMap<String, f32>> = names
@@ -537,7 +542,7 @@ pub fn calculate_stats_on_cube(
     }
     let feats = ndarray::Array1::from_vec(names.iter().map(|s| s.to_string()).collect());
 
-    AggregationResultsNoTime { results, feats }
+    ShapefileAggregationResultsNoTime { results, feats }
 }
 
 pub fn calculate_stat_on_pixels(
@@ -576,6 +581,47 @@ pub fn calculate_stat_on_pixels(
     .expect("Could not stack arrays");
 
     results
+}
+
+/// Calculate the statistics on the data cube on a timeline.
+/// This function is a wrapper around the `calculate_stats_on_pixels` function.
+///
+/// # Arguments
+/// * `data` - The data cube (time, row, col)
+/// * `timeline` - The timeline
+/// * `time_resolution` - The resolution in seconds
+/// * `time_offset` - The offset in seconds
+/// * `stats_functions` - The statistics functions to apply
+///
+/// # Returns
+/// An `RasterAggregationResults` struct containing the results.
+pub fn raster_aggregation_stats(
+    data: &Array3<f32>,
+    timeline: &Array1<DateTime<Utc>>,
+    time_resolution: u32,
+    time_offset: u32,
+    stats_functions: &[StatsFunctionType],
+) -> RasterAggregationResults {
+    let buckets = bucket_times(timeline, time_resolution, time_offset);
+
+    let mut results = HashMap::new();
+    for stat_fun_type in stats_functions {
+        let arrays: Vec<Array2<f32>> = buckets
+            .par_iter()
+            .map(|bucket| {
+                let ix_start = *bucket.time_indexes.first().expect("has at least one time");
+                let ix_end = *bucket.time_indexes.last().expect("has at least one time");
+
+                let cube = data.slice(s![ix_start..=ix_end, .., ..]);
+                calculate_stat_on_pixels(cube, *stat_fun_type)
+            })
+            .collect();
+        results.insert(stat_fun_type.to_string(), arrays);
+    }
+    let times = buckets.iter().map(|b| b.date_start).collect::<Vec<_>>();
+    let times = ndarray::Array1::from_vec(times);
+
+    RasterAggregationResults { times, results }
 }
 
 pub fn max(arr: &ndarray::Array1<N32>) -> f32 {

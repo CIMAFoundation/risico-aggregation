@@ -2,28 +2,59 @@ use serde::{Deserialize, Serialize};
 
 use std::error::Error;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+/// Configuration for the aggregation process
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
-    pub output_path: String,
-    pub variables: Vec<Variable>,
+    pub shapefile_aggregation: Option<ShapefileAggregationConfig>,
+    pub raster_aggregation: Option<RasterAggregationConfig>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+/// Configuration for raster aggregation
+/// This struct contains the input and output paths for raster aggregation,
+/// as well as the variables and their respective aggregation definitions.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RasterAggregationConfig {
+    pub input_path: PathBuf,
+    pub output_path: PathBuf,
+    pub variables: Vec<RasterAggregationVariable>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RasterAggregationVariable {
+    pub variable: String,
+    pub aggregations: Vec<RasterAggregationDefs>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RasterAggregationDefs {
+    pub resolution: u32,
+    pub offset: u32,
+    pub stats: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ShapefileAggregationConfig {
+    pub input_path: PathBuf,
+    pub output_path: PathBuf,
+    pub variables: Vec<ShapefileAggregationVariable>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Shapefile {
     pub id_field: String,
     pub shapefile: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Variable {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ShapefileAggregationVariable {
     pub variable: String,
-    pub aggregations: Vec<Aggregation>,
+    pub aggregations: Vec<ShapefileAggregationDefs>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Aggregation {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ShapefileAggregationDefs {
     pub resolution: u32,
     pub offset: u32,
     pub stats: Vec<String>,
@@ -74,12 +105,14 @@ variables:
         stats: [PERC90, PERC75, PERC50, MEAN, MAX]
         shapefiles: *shapefiles
 
-output_path: /opt/risico/RISICO2023/OUTPUT-NC
+input_path: /opt/risico/RISICO2023/OUTPUT-NC
+output_path: /opt/risico/RISICO2023/AGGRCACHE
 "#;
 
     #[test]
     fn test_deserialization() {
-        let parsed: Config = serde_yaml::from_str(TEST_YAML).expect("Failed to deserialize YAML");
+        let parsed: ShapefileAggregationConfig =
+            serde_yaml::from_str(TEST_YAML).expect("Failed to deserialize YAML");
 
         assert_eq!(parsed.variables.len(), 2);
 
@@ -113,7 +146,7 @@ variables:
         stats: [PERC90, PERC75, PERC50, MEAN]
 "#; // No `shapefiles` field in aggregations
 
-        let parsed: Result<Config, _> = serde_yaml::from_str(invalid_yaml);
+        let parsed: Result<ShapefileAggregationConfig, _> = serde_yaml::from_str(invalid_yaml);
         assert!(
             parsed.is_err(),
             "Expected an error due to missing required field"
@@ -132,7 +165,7 @@ variables:
         shapefiles: []
 "#;
 
-        let parsed: Result<Config, _> = serde_yaml::from_str(broken_yaml);
+        let parsed: Result<ShapefileAggregationConfig, _> = serde_yaml::from_str(broken_yaml);
         assert!(
             parsed.is_err(),
             "Expected an error due to invalid integer format"
