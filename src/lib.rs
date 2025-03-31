@@ -794,7 +794,7 @@ pub fn raster_aggregation_stats(
     let mut results = HashMap::new();
     for stat_fun_type in stats_functions {
         let arrays: Vec<Array2<f32>> = buckets
-            .par_iter()
+            .iter()
             .map(|bucket| {
                 let ix_start = *bucket.time_indexes.first().expect("has at least one time");
                 let ix_end = *bucket.time_indexes.last().expect("has at least one time");
