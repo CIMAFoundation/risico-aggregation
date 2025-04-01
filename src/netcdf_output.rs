@@ -178,7 +178,7 @@ pub fn write_aggregation_as_raster_results_to_file(
     // Create a new file with default settings
     for (stat_name, stat_values) in results.results.iter() {
         // fix var name for backward compatibility
-        let stat_name = stat_name.replace("PERC", "P").replace("IPERC", "P");
+        let stat_name = stat_name.replace("IPERC", "P").replace("PERC", "P");
         let var_name = format!("{var_name}-{stat_name}");
         let file_name = format!("{var_name}.nc");
         let file_path = output_path.join(file_name);
