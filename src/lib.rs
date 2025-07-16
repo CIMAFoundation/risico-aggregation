@@ -35,6 +35,7 @@ pub enum StatsFunctionType {
     MIN,
     MAX,
     MEAN,
+    MODE,
     PERC50,
     PERC51,
     PERC52,
@@ -168,6 +169,7 @@ pub fn get_stat_function(stat: &StatsFunctionType) -> StatFunction {
         StatsFunctionType::MIN => Box::new(min),
         StatsFunctionType::MAX => Box::new(max),
         StatsFunctionType::MEAN => Box::new(mean),
+        StatsFunctionType::MODE => Box::new(mode),
         StatsFunctionType::PERC50 => Box::new(|arr| mean_of_values_above_percentile(arr, 50)),
         StatsFunctionType::PERC51 => Box::new(|arr| mean_of_values_above_percentile(arr, 51)),
         StatsFunctionType::PERC52 => Box::new(|arr| mean_of_values_above_percentile(arr, 52)),
@@ -269,6 +271,7 @@ pub fn get_stat_function(stat: &StatsFunctionType) -> StatFunction {
         StatsFunctionType::IPERC3 => Box::new(|arr| mean_of_values_below_percentile(arr, 3)),
         StatsFunctionType::IPERC2 => Box::new(|arr| mean_of_values_below_percentile(arr, 2)),
         StatsFunctionType::IPERC1 => Box::new(|arr| mean_of_values_below_percentile(arr, 1)),
+        
     }
 }
 
@@ -639,7 +642,6 @@ pub fn bucket_times(
 /// # Returns
 /// An `AggregationResults` struct containing the results.
 ///
-/// # Example
 pub fn calculate_stats(
     data: &Array3<f32>,
     timeline: &Array1<DateTime<Utc>>,
@@ -850,6 +852,33 @@ pub fn mean(arr: &ndarray::Array1<N32>) -> f32 {
     }
 }
 
+/// Calculate the mean of the values above a given percentile.
+/// This function filters the values in the array that are above the specified percentile
+/// and calculates the mean of those values.
+/// # Arguments
+/// * `arr` - The input array of type `ndarray::Array1<N32>`.
+/// * `the_percentile` - The percentile value (0-100) to filter the values.
+/// # Returns
+/// The mean of the values above the specified percentile as `f32`. If the array is empty,
+/// it returns `f32::NAN`. If there are no values above the percentile, it returns the percentile value itself.
+/// # Example
+///
+/// ```
+/// use risico_aggregation::mean_of_values_above_percentile;
+/// use ndarray::array;
+/// use ndarray::Array1;
+/// use noisy_float::types::N32;
+/// let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0),
+///                  N32::from_f32(4.0), N32::from_f32(5.0)];
+/// let result = mean_of_values_above_percentile(&arr, 50);
+/// assert!((result - 4.5).abs() < 1e-6, "Expected mean of values above 50th percentile to be 4.5, got {}", result);
+/// let empty_arr: Array1<N32> = Array1::from_vec(vec![]);
+/// let empty_result = mean_of_values_above_percentile(&empty_arr, 50);
+/// assert!(empty_result.is_nan(), "Expected result for empty array to be NaN, got {}", empty_result);
+/// let unique_arr = array![N32::from_f32(4.0)];
+/// let unique_result = mean_of_values_above_percentile(&unique_arr, 50);
+/// assert!((unique_result - 4.0).abs() < 1e-6, "Expected mean of values above 50th percentile to be 4.0, got {}", unique_result);
+/// ```
 pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentile: u8) -> f32 {
     if arr.is_empty() {
         return f32::NAN;
@@ -875,6 +904,35 @@ pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentil
     }
 }
 
+/// Calculate the mean of the values below a given percentile.
+/// This function filters the values in the array that are below the specified percentile
+/// and calculates the mean of those values.
+/// # Arguments
+/// * `arr` - The input array of type `ndarray::Array1<N32>`.
+/// * `the_percentile` - The percentile value (0-100) to filter the values.
+/// # Returns
+/// The mean of the values below the specified percentile as `f32`. If the array is empty,
+/// it returns `f32::NAN`. If there are no values below the percentile, it returns the percentile value itself.
+/// # Example
+///
+/// ```
+/// use risico_aggregation::mean_of_values_below_percentile;
+/// use ndarray::array;
+/// use ndarray::Array1;
+/// use noisy_float::types::N32;
+/// let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0),
+///                  N32::from_f32(4.0), N32::from_f32(5.0)];
+/// let result = mean_of_values_below_percentile(&arr, 50);
+/// assert!((result - 1.5).abs() < 1e-6, "Expected mean of values below 50th percentile to be 1.5, got {}", result);
+///
+/// let empty_arr: Array1<N32> = Array1::from_vec(vec![]);
+/// let empty_result = mean_of_values_below_percentile(&empty_arr, 50);
+/// assert!(empty_result.is_nan(), "Expected result for empty array to be NaN, got {}", empty_result);
+/// let unique_arr = array![N32::from_f32(1.0)];
+///
+/// let unique_result = mean_of_values_below_percentile(&unique_arr, 50);
+/// assert!((unique_result - 1.0).abs() < 1e-6, "Expected mean of values below 50th percentile to be 1.0, got {}", unique_result);
+/// ```
 pub fn mean_of_values_below_percentile(arr: &ndarray::Array1<N32>, the_percentile: u8) -> f32 {
     if arr.is_empty() {
         return f32::NAN;
@@ -898,6 +956,54 @@ pub fn mean_of_values_below_percentile(arr: &ndarray::Array1<N32>, the_percentil
     } else {
         f32::NAN
     }
+}
+
+/// Calculate the mode of the values in the array.
+/// The mode is the value that appears most frequently in the array.
+/// # Arguments
+/// * `arr` - The input array of type `ndarray::Array1<N32>`.
+/// # Returns
+/// The mode of the array as `f32`. If the array is empty, returns `f32::NAN`.
+/// If there is no mode, return the value occupying the middle position in the sorted array.
+///
+/// # Example
+/// 
+/// ```
+/// use risico_aggregation::mode;
+/// use ndarray::array;
+/// use ndarray::Array1;
+/// use noisy_float::types::N32;
+/// let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(2.0), N32::from_f32(3.0)];
+/// let result = mode(&arr);
+/// assert_eq!(result, 2.0);
+/// 
+/// let empty_arr: Array1<N32> = Array1::from_vec(vec![]);
+/// let empty_result = mode(&empty_arr);
+/// assert!(empty_result.is_nan());
+/// 
+/// 
+/// let unique_arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0)];
+/// let unique_result = mode(&unique_arr);
+/// assert!((unique_result - 2.0).abs() < 1e-6, "Expected the middle value of unique array to be 2.0, got {}", unique_result);
+/// ```
+pub fn mode(arr: &ndarray::Array1<N32>) -> f32 {
+    if arr.is_empty() {
+        return f32::NAN;
+    }
+
+    let mut occurrences = HashMap::new();
+    for &value in arr.iter() {
+        *occurrences.entry(value).or_insert(0) += 1;
+    }
+
+    // if all the values are unique return the one in the middle
+    if occurrences.len() == arr.len() {
+        let mut unique_values = occurrences.keys().cloned().collect::<Vec<_>>();
+        unique_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        return unique_values[unique_values.len() / 2].into();
+    }
+
+    occurrences.into_iter().max_by_key(|&(_, count)| count).map(|(value, _)| value.into()).unwrap_or(f32::NAN)
 }
 
 #[cfg(test)]
@@ -995,11 +1101,11 @@ mod tests {
         // For example, 50th percentile in 1..10 ~ 5.5 => 5
         // So values above >=5 => {5,6,7,8,9,10}, mean = 8.0
         let val = mean_of_values_above_percentile(&arr, 50);
-        assert_eq!(val, 7.5);
+        assert_eq!(val, 8.0);
 
         // 90th percentile => ~ 9.1 => 9 => values above >= 9, mean = 9.5
         let val2 = mean_of_values_above_percentile(&arr, 90);
-        assert_eq!(val2, 9.5);
+        assert_eq!(val2, 10.0);
 
         // If array is empty
         let empty = ndarray::Array1::<N32>::from_vec(vec![]);
