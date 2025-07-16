@@ -5,7 +5,7 @@ mod python {
     use ndarray::s;
     use numpy::{IntoPyArray, PyArray2};
     use numpy::{PyReadonlyArray3, ToPyArray};
-    use pyo3::exceptions;
+    use pyo3::{exceptions, IntoPyObjectExt};
     use pyo3::prelude::*;
     use std::collections::HashMap;
     use wkt::TryFromWkt;
@@ -230,12 +230,13 @@ mod python {
         let aggregation_results =
             calculate_stats_on_cube(cube, rust_intersections, &rust_stats_functions);
 
-        let mut py_results_map: HashMap<String, PyObject> = HashMap::new();
+        let mut py_results_map: HashMap<String, _> = HashMap::new();
         for (key, array2) in aggregation_results.results {
             let py_array = array2.to_pyarray(py).to_owned();
-            py_results_map.insert(key, py_array.into_py(py));
+            let py_array = py_array.into_pyobject_or_pyerr(py)?;
+            py_results_map.insert(key, py_array);
         }
-        let py_results = py_results_map.into_py(py);
+        let py_results = py_results_map.into_pyobject_or_pyerr(py)?.into();
 
         Ok(PyAggregationResults {
             results: py_results,
