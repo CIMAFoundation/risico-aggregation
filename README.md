@@ -93,3 +93,12 @@ vals = aggregate_on_pixels(
 )
 ```
 
+### How to build the Python package locally
+#### Prerequisites:
+- Rust: https://www.rust-lang.org/tools/install
+- UV: `pip install uv`
+
+```sh
+uv sync
+uv build
+```
