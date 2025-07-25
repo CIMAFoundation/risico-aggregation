@@ -928,8 +928,16 @@ pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentil
 /// let empty_arr: Array1<N32> = Array1::from_vec(vec![]);
 /// let empty_result = mean_of_values_below_percentile(&empty_arr, 50);
 /// assert!(empty_result.is_nan(), "Expected result for empty array to be NaN, got {}", empty_result);
+/// 
+/// let stair_arr = array![N32::from_f32(1.0), N32::from_f32(1.0),N32::from_f32(1.0),N32::from_f32(2.0),N32::from_f32(2.0)];
+/// let result = mean_of_values_below_percentile(&stair_arr, 50);
+/// assert!((result - 1.0).abs() < 1e-6);
+/// 
+/// let flat_arr = array![N32::from_f32(1.0), N32::from_f32(1.0), N32::from_f32(1.0)];
+/// let result = mean_of_values_below_percentile(&flat_arr, 50);
+/// assert!((result - 1.0).abs() < 1e-6, "Expected mean of values below 50th percentile to be 1.0, got {}", result);
+/// 
 /// let unique_arr = array![N32::from_f32(1.0)];
-///
 /// let unique_result = mean_of_values_below_percentile(&unique_arr, 50);
 /// assert!((unique_result - 1.0).abs() < 1e-6, "Expected mean of values below 50th percentile to be 1.0, got {}", unique_result);
 /// ```
@@ -947,9 +955,10 @@ pub fn mean_of_values_below_percentile(arr: &ndarray::Array1<N32>, the_percentil
         .copied()
         .collect::<Array1<N32>>();
 
-    if below_threshold.is_empty() {
+    if below_threshold.is_empty() {        
         return perc_value.into();
     }
+
     let maybe_mean = below_threshold.mean();
     if let Some(mean) = maybe_mean {
         mean.into()
