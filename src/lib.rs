@@ -14,6 +14,7 @@ use ndarray::{s, Array1, Array2, Array3, ArrayView3, Axis};
 
 use kolmogorov_smirnov::percentile;
 
+use noisy_float::prelude::Float;
 use noisy_float::types::N32;
 use rayon::prelude::*;
 
@@ -271,7 +272,6 @@ pub fn get_stat_function(stat: &StatsFunctionType) -> StatFunction {
         StatsFunctionType::IPERC3 => Box::new(|arr| mean_of_values_below_percentile(arr, 3)),
         StatsFunctionType::IPERC2 => Box::new(|arr| mean_of_values_below_percentile(arr, 2)),
         StatsFunctionType::IPERC1 => Box::new(|arr| mean_of_values_below_percentile(arr, 1)),
-        
     }
 }
 
@@ -880,14 +880,21 @@ pub fn mean(arr: &ndarray::Array1<N32>) -> f32 {
 /// assert!((unique_result - 4.0).abs() < 1e-6, "Expected mean of values above 50th percentile to be 4.0, got {}", unique_result);
 /// ```
 pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentile: u8) -> f32 {
-    if arr.is_empty() {
+    let arr_cleaned = arr
+        .iter()
+        .filter(|x| x.is_finite())
+        .copied()
+        .collect::<Array1<N32>>();
+
+    if arr_cleaned.is_empty() {
         return f32::NAN;
     }
 
-    let slice = arr.as_slice().expect("Could not get slice");
-    let perc_value = percentile(slice, the_percentile);
+    let slice = arr_cleaned.as_slice().expect("Could not get slice");
 
-    let over_threshold = arr
+    let perc_value = percentile(&slice, the_percentile);
+
+    let over_threshold = arr_cleaned
         .iter()
         .filter(|&x| *x > perc_value)
         .copied()
@@ -896,6 +903,7 @@ pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentil
     if over_threshold.is_empty() {
         return perc_value.into();
     }
+
     let maybe_mean = over_threshold.mean();
     if let Some(mean) = maybe_mean {
         mean.into()
@@ -928,34 +936,41 @@ pub fn mean_of_values_above_percentile(arr: &ndarray::Array1<N32>, the_percentil
 /// let empty_arr: Array1<N32> = Array1::from_vec(vec![]);
 /// let empty_result = mean_of_values_below_percentile(&empty_arr, 50);
 /// assert!(empty_result.is_nan(), "Expected result for empty array to be NaN, got {}", empty_result);
-/// 
+///
 /// let stair_arr = array![N32::from_f32(1.0), N32::from_f32(1.0),N32::from_f32(1.0),N32::from_f32(2.0),N32::from_f32(2.0)];
 /// let result = mean_of_values_below_percentile(&stair_arr, 50);
 /// assert!((result - 1.0).abs() < 1e-6);
-/// 
+///
 /// let flat_arr = array![N32::from_f32(1.0), N32::from_f32(1.0), N32::from_f32(1.0)];
 /// let result = mean_of_values_below_percentile(&flat_arr, 50);
 /// assert!((result - 1.0).abs() < 1e-6, "Expected mean of values below 50th percentile to be 1.0, got {}", result);
-/// 
+///
 /// let unique_arr = array![N32::from_f32(1.0)];
 /// let unique_result = mean_of_values_below_percentile(&unique_arr, 50);
 /// assert!((unique_result - 1.0).abs() < 1e-6, "Expected mean of values below 50th percentile to be 1.0, got {}", unique_result);
 /// ```
 pub fn mean_of_values_below_percentile(arr: &ndarray::Array1<N32>, the_percentile: u8) -> f32 {
-    if arr.is_empty() {
+    let arr_cleaned = arr
+        .iter()
+        .filter(|x| x.is_finite())
+        .copied()
+        .collect::<Array1<N32>>();
+
+    if arr_cleaned.is_empty() {
         return f32::NAN;
     }
 
-    let slice = arr.as_slice().expect("Could not get slice");
-    let perc_value = percentile(slice, the_percentile);
+    let slice = arr_cleaned.as_slice().expect("Could not get slice");
 
-    let below_threshold = arr
+    let perc_value = percentile(&slice, the_percentile);
+
+    let below_threshold = arr_cleaned
         .iter()
         .filter(|&x| *x < perc_value)
         .copied()
         .collect::<Array1<N32>>();
 
-    if below_threshold.is_empty() {        
+    if below_threshold.is_empty() {
         return perc_value.into();
     }
 
@@ -976,7 +991,7 @@ pub fn mean_of_values_below_percentile(arr: &ndarray::Array1<N32>, the_percentil
 /// If there is no mode, return the value occupying the middle position in the sorted array.
 ///
 /// # Example
-/// 
+///
 /// ```
 /// use risico_aggregation::mode;
 /// use ndarray::array;
@@ -985,12 +1000,12 @@ pub fn mean_of_values_below_percentile(arr: &ndarray::Array1<N32>, the_percentil
 /// let arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(2.0), N32::from_f32(3.0)];
 /// let result = mode(&arr);
 /// assert_eq!(result, 2.0);
-/// 
+///
 /// let empty_arr: Array1<N32> = Array1::from_vec(vec![]);
 /// let empty_result = mode(&empty_arr);
 /// assert!(empty_result.is_nan());
-/// 
-/// 
+///
+///
 /// let unique_arr = array![N32::from_f32(1.0), N32::from_f32(2.0), N32::from_f32(3.0)];
 /// let unique_result = mode(&unique_arr);
 /// assert!((unique_result - 2.0).abs() < 1e-6, "Expected the middle value of unique array to be 2.0, got {}", unique_result);
@@ -1012,7 +1027,11 @@ pub fn mode(arr: &ndarray::Array1<N32>) -> f32 {
         return unique_values[unique_values.len() / 2].into();
     }
 
-    occurrences.into_iter().max_by_key(|&(_, count)| count).map(|(value, _)| value.into()).unwrap_or(f32::NAN)
+    occurrences
+        .into_iter()
+        .max_by_key(|&(_, count)| count)
+        .map(|(value, _)| value.into())
+        .unwrap_or(f32::NAN)
 }
 
 #[cfg(test)]
