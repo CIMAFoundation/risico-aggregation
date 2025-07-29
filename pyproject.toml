@@ -8,6 +8,8 @@ name = "risico_aggregation"
 requires-python = ">=3.8"
 version = "0.1.0"
 description = "A Python wrapper for my Rust algorithm"
+dependencies = [
+]
 #authors = "Mirko D'Andrea"
 
 
@@ -21,3 +23,15 @@ all-features = false
 no-default-features = true
 python-source = "python"
 module-name = "risico_aggregation._lib"
+
+[dependency-groups]
+dev = [
+    "geopandas>=0.13.2",
+    "ipykernel>=6.29.5",
+    "matplotlib>=3.7.5",
+    "maturin>=1.9.1",
+    "netcdf4>=1.7.2",
+    "notebook>=7.3.3",
+    "xarray>=2023.1.0",
+    "zarr>=2.16.1",
+]

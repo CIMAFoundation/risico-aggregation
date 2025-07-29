@@ -1,29 +1,57 @@
-import geopandas as gpd
+#%%
 import xarray as xr
-from risico_aggregation import (aggregate_stats, get_cache_key,
-                                get_intersections)
-
-from python.risico_aggregation.risico_aggregation import aggregate_on_pixels
-
-ds = xr.open_dataset("/opt/risico/RISICO2023/OUTPUT-NC/V.nc")
-gdf = gpd.read_file('/opt/risico/AGGREGATION_CACHE/shp/Italia/regioni_ISTAT2001.shp')
-gdf.set_index('COD_REG', inplace=True)
-
-cache_key = get_cache_key('prova', 'id', ds.latitude, ds.longitude)
-intersections = get_intersections(gdf, ds.latitude, ds.longitude, cache_key=cache_key)
-
-dsd = ds.V.values[:]
-
-dfs = aggregate_stats(
-    data=dsd,
-    stats_functions=['PERC75', 'MEAN', 'MAX'],
-    intersections=intersections,
-)
-print(dfs)
+import numpy as np
+import matplotlib.pyplot as plt
+from risico_aggregation import aggregate_on_pixels
 
 
-dsd = ds.V.values[:]
+ds = xr.open_dataset("/Users/mirko/Downloads/UMB.zarr")
+
+dsd = ds.UMB.values[:1]
+
 vals = aggregate_on_pixels(
     data=dsd,
-    stat_function='PERC75',
+    stat_function='IPERC50',
 )
+
+
+# # vals and dsd.values should be exactly the same
+# orig = dsd.squeeze()
+# orig = np.where(np.isfinite(orig), orig, 0.0)  
+# vals = np.where(np.isfinite(vals), vals, 0.0)
+# # check if the values are the same
+# assert np.array_equal(vals, orig)
+
+
+# create a new xarray DataArray with the aggregated values
+agg_da = xr.DataArray(
+    vals,
+    dims=['latitude', 'longitude'],
+    coords={
+        'time': ds.time[0],  
+        'latitude': ds.latitude,
+        'longitude': ds.longitude,
+    },
+    attrs={
+        '_FillValue': -9999,
+        'nodata': -9999,
+        'description': 'Aggregated values using IPERC75',
+        'units': 'unitless',
+    }
+)
+# create dataset
+agg_ds = xr.Dataset({'UMB': agg_da})
+
+plt.figure()
+plt.title('ORIG')
+ds.UMB.isel(time=0).plot()
+plt.figure()
+plt.title('AGGREGATED')
+agg_ds.UMB.isel().plot()
+plt.show()
+
+
+# save the aggregated DataArray to a new NetCDF file
+agg_da.to_netcdf('/Users/mirko/Downloads/aggregated_values.nc')
+ds.UMB.encoding.update({'_FillValue': -9999})
+ds.to_netcdf('/Users/mirko/Downloads/UMB.nc')

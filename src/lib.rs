@@ -37,6 +37,7 @@ pub enum StatsFunctionType {
     MAX,
     MEAN,
     MODE,
+    SUM,
     PERC50,
     PERC51,
     PERC52,
@@ -171,6 +172,7 @@ pub fn get_stat_function(stat: &StatsFunctionType) -> StatFunction {
         StatsFunctionType::MAX => Box::new(max),
         StatsFunctionType::MEAN => Box::new(mean),
         StatsFunctionType::MODE => Box::new(mode),
+        StatsFunctionType::SUM => Box::new(sum),
         StatsFunctionType::PERC50 => Box::new(|arr| mean_of_values_above_percentile(arr, 50)),
         StatsFunctionType::PERC51 => Box::new(|arr| mean_of_values_above_percentile(arr, 51)),
         StatsFunctionType::PERC52 => Box::new(|arr| mean_of_values_above_percentile(arr, 52)),
@@ -850,6 +852,15 @@ pub fn mean(arr: &ndarray::Array1<N32>) -> f32 {
     } else {
         f32::NAN
     }
+}
+
+pub fn sum(arr: &ndarray::Array1<N32>) -> f32 {
+    if arr.is_empty() {
+        return f32::NAN;
+    }
+
+    let maybe_sum = arr.sum();
+    maybe_sum.into()
 }
 
 /// Calculate the mean of the values above a given percentile.
