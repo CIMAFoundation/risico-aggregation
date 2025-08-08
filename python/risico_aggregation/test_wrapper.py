@@ -1,6 +1,5 @@
 #%%
 import xarray as xr
-import numpy as np
 import matplotlib.pyplot as plt
 from risico_aggregation import aggregate_on_pixels
 
@@ -13,15 +12,6 @@ vals = aggregate_on_pixels(
     data=dsd,
     stat_function='IPERC50',
 )
-
-
-# # vals and dsd.values should be exactly the same
-# orig = dsd.squeeze()
-# orig = np.where(np.isfinite(orig), orig, 0.0)  
-# vals = np.where(np.isfinite(vals), vals, 0.0)
-# # check if the values are the same
-# assert np.array_equal(vals, orig)
-
 
 # create a new xarray DataArray with the aggregated values
 agg_da = xr.DataArray(

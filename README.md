@@ -6,9 +6,7 @@ This repository contains a Rust CLI app for processing shapefiles and NetCDF fil
 
 ### Installation
 
-
 Clone the repository and run `cargo build --release`.
-
 
 ### Usage
 
@@ -36,7 +34,6 @@ variables:
     - MEAN
 ```
 
-
 ### Output
 
 The results are written to a sequence of NetCDF files, one for each variable. The files contain groups according to the following pattern:
@@ -44,22 +41,23 @@ The results are written to a sequence of NetCDF files, one for each variable. Th
 `shapefile_field_resolution_offset`
 Each group contains the selected *stats* as variables, with rows representing the dates and columns representing the features.
 
-
-
 ## Python Wrapper
 
-#### Prerequites:
-- Rust: https://www.rust-lang.org/tools/install
+### Prerequisites
+
+- Rust: <https://www.rust-lang.org/tools/install>
+
 - Maturin: `pip install maturin`
 
-### Installation
+### Python Wrapper Installation
 
 Install in your virtual environment by running:
+
 ```sh
 pip install git+https://github.com/CIMAFoundation/risico-aggregation
 ```
 
-### Usage
+### Python Wrapper Usage
 
 ```python
 import geopandas as gpd
@@ -94,8 +92,10 @@ vals = aggregate_on_pixels(
 ```
 
 ### How to build the Python package locally
-#### Prerequisites:
-- Rust: https://www.rust-lang.org/tools/install
+
+#### Python Wrapper Prerequisites
+
+- Rust: <https://www.rust-lang.org/tools/install>
 - UV: `pip install uv`
 
 ```sh

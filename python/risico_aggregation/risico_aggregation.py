@@ -1,14 +1,11 @@
 # risico_aggregation_interface.py
 import hashlib
-from collections import defaultdict
-from datetime import datetime, timedelta
 from typing import List, Optional
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
-from pytz import UTC
 from shapely.geometry.base import BaseGeometry
 
 # Import the compiled Rust module.
@@ -182,71 +179,3 @@ def aggregate_on_pixels(
 
 
     return results
-
-
-def aggregate_timestamps(
-        timestamps: list[datetime], 
-        window_size_h: int, 
-        step_h: int, 
-        reference_hour: int, 
-        offset_h: int, 
-        label: str = "right", 
-        include_partial: bool = False
-    ) -> dict[datetime, list[datetime]]:
-    """
-    Aggregates a list of timestamps into hourly windows.
-    
-    Args:
-        timestamps (list[datetime]): sorted list of datetime objects.
-        window_size_h (int): window size in hours.
-        step_h (int): step between successive windows in hours.
-        reference_hour (int): base hour to align the windows (0-23).
-        offset_h (int): offset to apply to the reference_hour.
-        label (str): where to position the bucket label ("left", "center", "right").
-        include_partial (bool): whether to include partial windows at the start/end.
-
-    Returns:
-        dict[datetime, list[datetime]]: dictionary with keys = window timestamp, values = aggregated timestamps.
-    """
-    if label not in {"left", "center", "right"}:
-        raise ValueError("label must be 'left', 'center', or 'right'")
-
-    # Se non ci sono dati, ritorna subito
-    if not timestamps:
-        return {}
-
-    # Sort timestamps to ensure they are in order
-    timestamps = sorted(timestamps)
-    min_ts = timestamps[0]
-    max_ts = timestamps[-1]
-
-    # Calculate initial alignment
-    reference_ts = datetime(min_ts.year, min_ts.month, min_ts.day, reference_hour) + timedelta(hours=offset_h)
-    while reference_ts > min_ts:
-        reference_ts -= timedelta(hours=step_h)
-
-    # Construct windows
-    buckets = defaultdict(list)
-    current_start = reference_ts
-    delta_window = timedelta(hours=window_size_h)
-    delta_step = timedelta(hours=step_h)
-
-    while current_start <= max_ts:
-        current_end = current_start + delta_window
-        window_timestamps = [ts for ts in timestamps if current_start <= ts < current_end]
-
-        if window_timestamps or include_partial:
-            if label == "left":
-                bucket_label = current_start
-            elif label == "right":
-                bucket_label = current_end
-            elif label == "center":
-                bucket_label = current_start + delta_window / 2
-            else:  # This should never happen due to earlier validation
-                raise ValueError("Invalid label value")
-            
-            buckets[bucket_label].extend(window_timestamps)
-
-        current_start += delta_step
-
-    return dict(buckets)

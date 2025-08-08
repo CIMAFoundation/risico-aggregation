@@ -1,1 +1,1 @@
-from .risico_aggregation import get_intersections, aggregate_stats, get_cache_key, aggregate_on_pixels
+from .risico_aggregation import get_intersections, aggregate_stats, get_cache_key, aggregate_on_pixels # noqa: F401
