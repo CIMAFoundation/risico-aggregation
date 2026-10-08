@@ -5,7 +5,7 @@ use std::hash::Hash;
 use std::{error::Error, marker::PhantomData};
 
 use chrono::{DateTime, Datelike, TimeZone, Utc};
-use euclid::{Box2D, Point2D};
+use euclid::{Box2D, Point2D, Vector2D};
 use geo_rasterize::Transform;
 
 use geo::algorithm::BoundingRect;
@@ -485,24 +485,13 @@ pub fn get_intersections(
 
             let n_cols = grid.n_cols;
             let n_rows = grid.n_rows;
-            let mut builder = BinaryBuilder::new()
-                .width(n_cols)
-                .height(n_rows)
-                .geo_to_pix(geo_to_pix)
-                .build()
-                .expect("Could not create geo-rasterize builder");
-
-            builder
-                .rasterize(geometry)
-                .expect("Could not rasterize geometry");
-            let pixels = builder.finish();
 
             let min_col = f64::floor(bbox_pixel_space.min.x) as usize;
             let max_col = f64::ceil(bbox_pixel_space.max.x);
             let min_row = f64::floor(bbox_pixel_space.min.y) as usize;
             let max_row = f64::ceil(bbox_pixel_space.max.y);
 
-            if max_col < 0.0 || max_row < 0.0 || min_col > (n_cols - 1) || min_row > (n_rows + 1) {
+            if max_col < 0.0 || max_row < 0.0 || min_col > (n_cols - 1) || min_row > (n_rows - 1) {
                 return Some((name, vec![]));
             }
 
@@ -511,9 +500,25 @@ pub fn get_intersections(
             let min_row = usize::clamp(min_row, 0, n_rows - 1);
             let max_row = usize::clamp(max_row as usize, 0, n_rows - 1);
 
+            // rasterize only the bounding box window, not the whole grid:
+            // a full-grid bitmap per feature is very expensive on large grids
+            let window_to_pix = geo_to_pix
+                .then_translate(Vector2D::new(-(min_col as f64), -(min_row as f64)));
+            let mut builder = BinaryBuilder::new()
+                .width(max_col - min_col + 1)
+                .height(max_row - min_row + 1)
+                .geo_to_pix(window_to_pix)
+                .build()
+                .expect("Could not create geo-rasterize builder");
+
+            builder
+                .rasterize(geometry)
+                .expect("Could not rasterize geometry");
+            let pixels = builder.finish();
+
             let coords = (min_row..=max_row)
                 .flat_map(|row| (min_col..=max_col).map(move |col| (row, col)))
-                .filter(|(row, col)| pixels[[*row, *col]])
+                .filter(|(row, col)| pixels[[*row - min_row, *col - min_col]])
                 .collect::<Vec<_>>();
 
             Some((name, coords))
@@ -1344,6 +1349,51 @@ mod tests {
 
         // We expect an empty vector
         assert!(coords.is_empty());
+    }
+
+    #[test]
+    fn test_intersections_window_offset_and_clamp() {
+        // grid with 10 rows x 10 cols, step=1: pixel (row, col) has center at (col + 0.5, row + 0.5)
+        let grid = Grid::new(0.0, 9.0, 0.0, 9.0, 10, 10);
+
+        let rect = |x0: f64, x1: f64, y0: f64, y1: f64| {
+            Geometry::Polygon(Polygon::new(
+                LineString::from(vec![
+                    Coord { x: x0, y: y0 },
+                    Coord { x: x1, y: y0 },
+                    Coord { x: x1, y: y1 },
+                    Coord { x: x0, y: y1 },
+                    Coord { x: x0, y: y0 },
+                ]),
+                vec![],
+            ))
+        };
+
+        let records = vec![
+            // fully inside, away from the origin: rows 6..=7, cols 1..=2
+            GeomRecord {
+                geometry: rect(1.2, 2.8, 6.2, 7.8),
+                name: "inside".to_string(),
+            },
+            // extends beyond the right edge: rows 2..=4, cols 6..=9 (touched pixels)
+            GeomRecord {
+                geometry: rect(6.6, 20.0, 2.4, 4.6),
+                name: "clamped".to_string(),
+            },
+        ];
+
+        let intersections = get_intersections(&grid, records).unwrap();
+
+        let mut inside = intersections.get("inside").unwrap().clone();
+        inside.sort();
+        assert_eq!(inside, vec![(6, 1), (6, 2), (7, 1), (7, 2)]);
+
+        let mut clamped = intersections.get("clamped").unwrap().clone();
+        clamped.sort();
+        let expected: Vec<(usize, usize)> = (2..=4)
+            .flat_map(|row| (6..=9).map(move |col| (row, col)))
+            .collect();
+        assert_eq!(clamped, expected);
     }
 
     #[test]
