@@ -208,5 +208,12 @@ pub fn load_intersections_from_db(
             .collect();
         intersections.insert(feature_id, rows_cols);
     }
+    // The grid and the shapefile are recorded independently: both can be in the
+    // cache from other pairs (e.g. the grid from another shapefile, the shapefile
+    // from an older grid) while this pair was never computed. No row means not
+    // cached; a shapefile with no feature on the grid is recomputed, which is cheap.
+    if intersections.is_empty() {
+        return Ok(None);
+    }
     Ok(Some(intersections))
 }
