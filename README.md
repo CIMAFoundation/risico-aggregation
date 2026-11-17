@@ -8,6 +8,16 @@ This repository contains a Rust CLI app for processing shapefiles and NetCDF fil
 
 Clone the repository and run `cargo build --release`.
 
+NetCDF is read and written in pure Rust (`netcdf-reader`, `netcdf-writer`), so no
+netcdf-c or HDF5 library is needed. A static Linux binary:
+
+```sh
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl --bin risico_aggregation
+```
+
+(`musl-tools` must be installed for the bundled SQLite.)
+
 ### Usage
 
 ```sh

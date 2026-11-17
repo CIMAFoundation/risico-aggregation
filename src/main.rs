@@ -50,7 +50,7 @@ pub fn shapefile_aggregation(
 
         let cache_file = format!("{}.nc", variable.variable);
         let cache_path = output_path.join(cache_file);
-        let mut out_file = open_netcdf(&cache_path)?;
+        let mut out_file = open_netcdf(&cache_path);
 
         for aggregation in &variable.aggregations {
             let resolution = aggregation.resolution;
@@ -122,6 +122,7 @@ pub fn shapefile_aggregation(
                 )?;
             }
         }
+        out_file.finish()?;
     }
     Ok(())
 }

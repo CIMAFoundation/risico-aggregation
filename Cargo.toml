@@ -17,9 +17,8 @@ cli = [
     "flate2",
     "serde",
     "serde_yaml",
-    "netcdf",
-    "netcdf-sys",
-    "netcdf-src",
+    "netcdf-reader",
+    "netcdf-writer",
     "shapefile",
     "rusqlite",
 ]
@@ -50,9 +49,9 @@ rusqlite = { version = "0.33.0", features = [
     "chrono",
     "bundled",
 ], optional = true }
-netcdf = { version = "0.10.5", optional = true }
-netcdf-sys = { version = "0.8.1", features = ["static"], optional = true }
-netcdf-src = { version = "0.4.1", optional = true }
+# Pure-Rust NetCDF, as in risico-2023: no netcdf-c / HDF5 to link.
+netcdf-reader = { version = "0.13", optional = true }
+netcdf-writer = { version = "0.13", optional = true }
 clap = { version = "4.5.31", features = ["cargo", "derive"], optional = true }
 clap_derive = { version = "4.5.28", optional = true }
 flate2 = { version = "1.0.35", optional = true }

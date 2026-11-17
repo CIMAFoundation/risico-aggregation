@@ -1,93 +1,114 @@
 use chrono::{DateTime, Utc};
 use ndarray::{Array1, Array3};
-use netcdf::types::{NcTypeDescriptor, NcVariableType};
-use netcdf::{self, Extents, FileMut, Result};
+use netcdf_writer::{
+    DimensionId, NcAttrValue, NcFileBuilder, NcWriteFormat, NcWriteOptions, Result, VariableId,
+};
 use risico_aggregation::{Grid, RasterAggregationResults, ShapefileAggregationResults};
-use std::ffi::CString;
-use std::io;
-use std::path::Path;
+use std::fs::File;
+use std::io::{self, BufWriter, Write};
+use std::path::{Path, PathBuf};
 
-#[repr(transparent)]
-/// `NC_STRING` compatible struct, no drop implementation, use with caution
-pub struct NcString(pub *mut std::ffi::c_char);
-unsafe impl NcTypeDescriptor for NcString {
-    fn type_descriptor() -> NcVariableType {
-        NcVariableType::String
+/// Every file is NetCDF-4: the shapefile cache needs groups and `NC_STRING`.
+const NC4: NcWriteOptions = NcWriteOptions {
+    format: NcWriteFormat::Nc4,
+};
+
+/// The shapefile aggregation file of one variable: one group per shapefile,
+/// field, resolution and offset. The groups are collected in memory and the
+/// file is written by [`AggregationFile::finish`].
+pub struct AggregationFile {
+    path: PathBuf,
+    builder: NcFileBuilder,
+}
+
+impl AggregationFile {
+    /// Write the file, replacing an existing one.
+    pub fn finish(self) -> Result<()> {
+        write_file(&self.builder, &self.path)
     }
 }
 
-impl From<&String> for NcString {
-    fn from(s: &String) -> Self {
-        // Create a CString; this will ensure the string is NUL-terminated.
-        let cstring = CString::new(s.clone()).expect("CString::new failed");
-        // Convert the CString into a raw pointer.
-        // This transfers ownership; note that without a proper drop implementation,
-        // you'll need to eventually reclaim the memory (using CString::from_raw) if applicable.
-
-        Self(cstring.into_raw())
-    }
+fn write_file(builder: &NcFileBuilder, path: &Path) -> Result<()> {
+    let mut writer = BufWriter::new(File::create(path)?);
+    builder.write(&mut writer, NC4)?;
+    writer.flush()?;
+    Ok(())
 }
 
-/// Open a netCDF file for update if it exists, or create a new one.
-pub fn open_netcdf(path: &Path) -> Result<FileMut> {
-    // Create a new netCDF file.
-    netcdf::create(path)
+/// Start the aggregation file of a variable; nothing is written until `finish`.
+pub fn open_netcdf(path: &Path) -> AggregationFile {
+    AggregationFile {
+        path: path.to_path_buf(),
+        builder: NcFileBuilder::new(),
+    }
 }
 
 pub fn get_group_name(shp_name: &str, fid: &str, resolution: u32, offset: u32) -> String {
     format!("{}_{}_{}_{}", shp_name, fid, resolution, offset)
 }
 
+/// Deflate level 9 with shuffle, as written with netcdf-c.
+fn compress(builder: &mut NcFileBuilder, var: VariableId, level: u8) -> Result<()> {
+    builder.set_variable_deflate(var, Some(level), true)
+}
+
+/// A dimension of `len`. netcdf-writer refuses a fixed dimension of length 0
+/// (netcdf-c accepts it): an empty one, e.g. a shapefile with no feature on
+/// the grid, is written as unlimited, still of length 0 for the readers.
+fn dimension(builder: &mut NcFileBuilder, path: String, len: usize) -> Result<DimensionId> {
+    if len == 0 {
+        builder.add_unlimited_dimension_path(path)
+    } else {
+        builder.add_dimension_path(path, len as u64)
+    }
+}
+
+fn text(value: &str) -> NcAttrValue {
+    NcAttrValue::Chars(value.to_string())
+}
+
 /// Write the results to a group in the netCDF file.
 pub fn write_aggregation_to_shapefile_results_to_file(
-    file: &mut FileMut,
+    file: &mut AggregationFile,
     group_name: &str,
     results: ShapefileAggregationResults,
 ) -> Result<()> {
+    let builder = &mut file.builder;
     let rows = results.times.len();
     let cols = results.feats.len();
 
-    let mut group = if let Some(existing) = file.group_mut(group_name)? {
-        Ok(existing)
-    } else {
-        file.add_group(group_name)
-    }?;
+    // Dimensions of the group (netCDF variables must be associated with dimensions)
+    let date = dimension(builder, format!("{group_name}/date"), rows)?;
+    let feature = dimension(builder, format!("{group_name}/feature"), cols)?;
 
-    // Create dimensions (netCDF variables must be associated with dimensions)
-    group.add_dimension("date", rows)?;
-    group.add_dimension("feature", cols)?;
-
-    // Write the "dates" variable (here assumed to be numeric).
-    let mut dates_var = group.add_variable::<u64>("date", &["date"])?;
-    dates_var
-        .put_attribute("units", "seconds since 1970-01-01 00:00:00.0")
-        .unwrap_or_else(|_| panic!("Add time units failed"));
-
+    // The dates, as seconds since the epoch.
+    let dates_var = builder.add_variable_path::<u64>(format!("{group_name}/date"), &[date])?;
+    builder.add_variable_attribute(
+        dates_var,
+        "units",
+        text("seconds since 1970-01-01 00:00:00.0"),
+    )?;
     let times = results
         .times
         .iter()
         .map(|t| t.timestamp() as u64)
         .collect::<Vec<_>>();
-    dates_var.put_values(&times, Extents::All)?;
+    builder.write_variable(dates_var, &times)?;
 
-    // Write the "features" variable.
-    // Write the "features" variable.
-    let mut feats_var = group.add_variable::<NcString>("feature", &["feature"])?;
+    // The feature ids, as NC_STRING.
+    let feats_var =
+        builder.add_string_variable_path(format!("{group_name}/feature"), &[feature])?;
+    builder.write_string_variable(feats_var, &results.feats.to_vec())?;
 
-    // Convert each feature to a String
-    let feats: Vec<NcString> = results.feats.iter().map(|s| s.into()).collect();
-
-    // Put the values into the variable
-    feats_var.put_values(&feats, Extents::All)?;
-
-    // println!("Data written to netCDF file successfully.");
-
-    // // For each (statistic, matrix) pair, create a variable with dimensions [rows, cols].
+    // For each (statistic, matrix) pair, a variable with dimensions [date, feature].
     for (stat, matrix) in results.results {
-        let mut var = group.add_variable::<f64>(&stat, &["date", "feature"])?;
-        var.set_compression(9, true)
-            .expect("Can set compression level");
-        var.put_values(matrix.as_slice().unwrap(), Extents::All)?;
+        let var =
+            builder.add_variable_path::<f64>(format!("{group_name}/{stat}"), &[date, feature])?;
+        compress(builder, var, 9)?;
+        // The statistics are f32; the file keeps them as double, as netcdf-c
+        // converted them on write.
+        let values: Vec<f64> = matrix.iter().map(|v| *v as f64).collect();
+        builder.write_variable(var, &values)?;
     }
 
     Ok(())
@@ -100,73 +121,49 @@ fn write_netcdf(
     grid: &Grid,
     times: &Array1<DateTime<Utc>>,
     compression_rate: u8,
-) -> Result<(), io::Error> {
-    // Create a new file with default settings
-    let options = netcdf::Options::NETCDF4;
+) -> Result<()> {
+    let mut builder = NcFileBuilder::new();
 
-    let mut file = netcdf::create_with(file_name, options)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-    // We must create a dimension which corresponds to our data
     let n_lats = grid.n_rows;
     let n_lons = grid.n_cols;
-    let lats: Vec<f64> = (0..n_lats)
-        .map(|i| grid.min_lat + (grid.max_lat - grid.min_lat) * (i as f64) / (grid.n_rows as f64))
+    let lats: Vec<f32> = (0..n_lats)
+        .map(|i| {
+            (grid.min_lat + (grid.max_lat - grid.min_lat) * (i as f64) / (grid.n_rows as f64))
+                as f32
+        })
         .collect();
-    let lons: Vec<f64> = (0..n_lons)
-        .map(|i| grid.min_lon + (grid.max_lon - grid.min_lon) * (i as f64) / (grid.n_cols as f64))
+    let lons: Vec<f32> = (0..n_lons)
+        .map(|i| {
+            (grid.min_lon + (grid.max_lon - grid.min_lon) * (i as f64) / (grid.n_cols as f64))
+                as f32
+        })
         .collect();
 
-    file.add_dimension("latitude", n_lats).unwrap();
-    file.add_dimension("longitude", n_lons).unwrap();
-    file.add_dimension("time", times.len()).unwrap();
+    let lat_dim = builder.add_dimension("latitude", n_lats as u64)?;
+    let lon_dim = builder.add_dimension("longitude", n_lons as u64)?;
+    let time_dim = builder.add_dimension("time", times.len() as u64)?;
 
-    let mut var = file
-        .add_variable::<f32>("latitude", &["latitude"])
-        .expect("Add latitude failed");
+    let var = builder.add_variable::<f32>("latitude", &[lat_dim])?;
+    compress(&mut builder, var, compression_rate)?;
+    builder.write_variable(var, &lats)?;
 
-    var.set_compression(compression_rate as i32, true)
-        .expect("Set compression failed");
-    var.put_values(&lats, Extents::All)
-        .expect("Add longitude failed");
+    let var = builder.add_variable::<f32>("longitude", &[lon_dim])?;
+    compress(&mut builder, var, compression_rate)?;
+    builder.write_variable(var, &lons)?;
 
-    let mut var = file
-        .add_variable::<f32>("longitude", &["longitude"])
-        .expect("Add longitude failed");
-
-    var.set_compression(compression_rate as i32, true)
-        .expect("Set compression failed");
-    var.put_values(&lons, Extents::All)
-        .expect("Add longitude failed");
-
-    let mut var = file
-        .add_variable::<i64>("time", &["time"])
-        .expect("Add time failed");
-
-    var.put_attribute("units", "seconds since 1970-01-01 00:00:00")
-        .unwrap_or_else(|_| panic!("Add time units failed"));
-    var.put_attribute("long_name", "time")
-        .unwrap_or_else(|_| panic!("Add time units failed"));
-    var.put_attribute("calendar", "proleptic_gregorian")
-        .unwrap_or_else(|_| panic!("Add time units failed"));
-
+    let var = builder.add_variable::<i64>("time", &[time_dim])?;
+    builder.add_variable_attribute(var, "units", text("seconds since 1970-01-01 00:00:00"))?;
+    builder.add_variable_attribute(var, "long_name", text("time"))?;
+    builder.add_variable_attribute(var, "calendar", text("proleptic_gregorian"))?;
+    compress(&mut builder, var, compression_rate)?;
     let times: Vec<i64> = times.iter().map(|t| t.timestamp()).collect();
+    builder.write_variable(var, &times)?;
 
-    var.set_compression(compression_rate as i32, true)
-        .expect("Set compression failed");
-    var.put_values(&times, Extents::All)
-        .unwrap_or_else(|_| panic!("Add time failed"));
+    let var = builder.add_variable::<f32>(variable, &[time_dim, lat_dim, lon_dim])?;
+    compress(&mut builder, var, compression_rate)?;
+    builder.write_variable(var, values)?;
 
-    let mut var = file
-        .add_variable::<f32>(variable, &["time", "latitude", "longitude"])
-        .unwrap_or_else(|_| panic!("Add {variable} failed"));
-
-    var.set_compression(compression_rate as i32, true)
-        .expect("Set compression failed");
-    var.put_values(values, Extents::All)
-        .unwrap_or_else(|err| panic!("Add {variable} failed: {err}"));
-
-    Ok(())
+    write_file(&builder, file_name)
 }
 
 pub fn write_aggregation_as_raster_results_to_file(
@@ -174,8 +171,7 @@ pub fn write_aggregation_as_raster_results_to_file(
     var_name: &str,
     results: RasterAggregationResults,
     grid: &Grid,
-) -> Result<(), io::Error> {
-    // Create a new file with default settings
+) -> std::result::Result<(), io::Error> {
     for (stat_name, stat_values) in results.results.iter() {
         // fix var name for backward compatibility
         let stat_name = stat_name.replace("IPERC", "P").replace("PERC", "P");
@@ -196,7 +192,8 @@ pub fn write_aggregation_as_raster_results_to_file(
             grid,
             times,
             9,
-        )?;
+        )
+        .map_err(io::Error::other)?;
     }
 
     Ok(())
