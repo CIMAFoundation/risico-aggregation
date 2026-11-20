@@ -7,6 +7,13 @@ edition = "2021"
 name = "risico_aggregation"
 crate-type = ["cdylib", "rlib"]
 
+# The CLI needs the `cli` dependencies; without it (the Python wheel, built by maturin
+# with `--no-default-features --features python`) only the library is built.
+[[bin]]
+name = "risico_aggregation"
+path = "src/main.rs"
+required-features = ["cli"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
 default = ["cli"]
